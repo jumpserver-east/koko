@@ -41,6 +41,8 @@ const (
 	InsecureCipherRC4          = "arcfour"
 	InsecureCipherRC4128       = "arcfour128"
 	InsecureCipherRC4256       = "arcfour256"
+	CipherSM4CTR               = "sm4-ctr"
+	CipherSM4GCM               = "sm4-gcm"
 )
 
 // The key exchanges currently or previously implemented by this library, to use
@@ -61,6 +63,9 @@ const (
 	// KeyExchangeMLKEM768X25519 is supported from Go 1.24.
 	KeyExchangeMLKEM768X25519 = "mlkem768x25519-sha256"
 
+	KeyExchangeECDHSM2P256SM3 = "ecdh-sm2p256v1-sm3"
+	KeyExchangeSM2SM3         = "sm2-sm3"
+
 	// An alias for KeyExchangeCurve25519SHA256. This kex ID will be added if
 	// KeyExchangeCurve25519SHA256 is requested for backward compatibility with
 	// OpenSSH versions up to 7.2.
@@ -78,6 +83,8 @@ const (
 	HMACSHA512         = "hmac-sha2-512"
 	HMACSHA1           = "hmac-sha1"
 	InsecureHMACSHA196 = "hmac-sha1-96"
+	HMACSM3            = "hmac-sm3"
+	HMACSM396          = "hmac-sm3-96"
 )
 
 var (
@@ -92,6 +99,8 @@ var (
 		KeyExchangeDH14SHA256,
 		KeyExchangeDH16SHA512,
 		KeyExchangeDHGEXSHA256,
+		KeyExchangeECDHSM2P256SM3,
+		KeyExchangeSM2SM3,
 	}
 	// defaultKexAlgos specifies the default preference for key-exchange
 	// algorithms in preference order.
@@ -120,6 +129,8 @@ var (
 		CipherAES128CTR,
 		CipherAES192CTR,
 		CipherAES256CTR,
+		CipherSM4CTR,
+		CipherSM4GCM,
 	}
 	// defaultCiphers specifies the default preference for ciphers algorithms
 	// in preference order.
@@ -141,6 +152,7 @@ var (
 		HMACSHA256,
 		HMACSHA512,
 		HMACSHA1,
+		HMACSM3,
 	}
 	// defaultMACs specifies the default preference for MAC algorithms in
 	// preference order.
@@ -156,6 +168,7 @@ var (
 	// package and which have security issues.
 	insecureMACs = []string{
 		InsecureHMACSHA196,
+		HMACSM396,
 	}
 	// supportedHostKeyAlgos specifies the supported host-key algorithms (i.e.
 	// methods of authenticating servers) implemented by this package in
@@ -173,6 +186,7 @@ var (
 		KeyAlgoECDSA384,
 		KeyAlgoECDSA521,
 		KeyAlgoED25519,
+		KeyAlgoSM2,
 	}
 	// defaultHostKeyAlgos specifies the default preference for host-key
 	// algorithms in preference order.
@@ -347,6 +361,7 @@ func keyFormatForAlgorithm(sigAlgo string) string {
 		KeyAlgoECDSA256,
 		KeyAlgoECDSA384,
 		KeyAlgoECDSA521,
+		KeyAlgoSM2,
 		InsecureKeyAlgoDSA,
 		InsecureCertAlgoDSAv01,
 		CertAlgoECDSA256v01,
@@ -437,7 +452,7 @@ func (a *DirectionAlgorithms) rekeyBytes() int64 {
 	// 2^(BLOCKSIZE/4) blocks. For all AES flavors BLOCKSIZE is
 	// 128.
 	switch a.Cipher {
-	case CipherAES128CTR, CipherAES192CTR, CipherAES256CTR, CipherAES128GCM, CipherAES256GCM, InsecureCipherAES128CBC:
+	case CipherAES128CTR, CipherAES192CTR, CipherAES256CTR, CipherAES128GCM, CipherAES256GCM, InsecureCipherAES128CBC, CipherSM4CTR, CipherSM4GCM:
 		return 16 * (1 << 32)
 
 	}
@@ -450,6 +465,7 @@ var aeadCiphers = map[string]bool{
 	CipherAES128GCM:        true,
 	CipherAES256GCM:        true,
 	CipherChaCha20Poly1305: true,
+	CipherSM4GCM:           true,
 }
 
 func findAgreedAlgorithms(isClient bool, clientKexInit, serverKexInit *kexInitMsg) (algs *NegotiatedAlgorithms, err error) {

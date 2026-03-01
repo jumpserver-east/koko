@@ -14,6 +14,8 @@ import (
 	"crypto/sha512"
 	"hash"
 	"slices"
+
+	"github.com/emmansun/gmsm/sm3"
 )
 
 type macMode struct {
@@ -80,5 +82,11 @@ func init() {
 	}}
 	macModes[InsecureHMACSHA196] = &macMode{20, false, func(key []byte) hash.Hash {
 		return truncatingMAC{12, hmac.New(sha1.New, key)}
+	}}
+	macModes[HMACSM3] = &macMode{32, false, func(key []byte) hash.Hash {
+		return hmac.New(sm3.New, key)
+	}}
+	macModes[HMACSM396] = &macMode{32, false, func(key []byte) hash.Hash {
+		return truncatingMAC{12, hmac.New(sm3.New, key)}
 	}}
 }

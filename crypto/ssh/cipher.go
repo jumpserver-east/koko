@@ -20,6 +20,8 @@ import (
 
 	"golang.org/x/crypto/chacha20"
 	"golang.org/x/crypto/internal/poly1305"
+
+	"github.com/emmansun/gmsm/sm4"
 )
 
 const (
@@ -47,6 +49,14 @@ func (c noneCipher) XORKeyStream(dst, src []byte) {
 
 func newAESCTR(key, iv []byte) (cipher.Stream, error) {
 	c, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewCTR(c, iv), nil
+}
+
+func newSM4CTR(key, iv []byte) (cipher.Stream, error) {
+	c, err := sm4.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +119,8 @@ func init() {
 	// For now it means we'll work with fips140=on but not fips140=only.
 	cipherModes[CipherAES128GCM] = &cipherMode{16, 12, newGCMCipher}
 	cipherModes[CipherAES256GCM] = &cipherMode{32, 12, newGCMCipher}
+	cipherModes[CipherSM4CTR] = &cipherMode{16, sm4.BlockSize, streamCipherMode(0, newSM4CTR)}
+	cipherModes[CipherSM4GCM] = &cipherMode{16, 12, newSM4GCMCipher}
 
 	if fips140.Enabled() {
 		defaultCiphers = slices.DeleteFunc(defaultCiphers, func(algo string) bool {
@@ -311,6 +323,23 @@ type gcmCipher struct {
 
 func newGCMCipher(key, iv, unusedMacKey []byte, unusedAlgs DirectionAlgorithms) (packetCipher, error) {
 	c, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	aead, err := cipher.NewGCM(c)
+	if err != nil {
+		return nil, err
+	}
+
+	return &gcmCipher{
+		aead: aead,
+		iv:   iv,
+	}, nil
+}
+
+func newSM4GCMCipher(key, iv, unusedMacKey []byte, unusedAlgs DirectionAlgorithms) (packetCipher, error) {
+	c, err := sm4.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}

@@ -31,6 +31,8 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/ssh/internal/bcrypt_pbkdf"
+
+	"github.com/emmansun/gmsm/sm2"
 )
 
 // Public key algorithms names. These values can appear in PublicKey.Type,
@@ -50,6 +52,7 @@ const (
 	KeyAlgoECDSA521    = "ecdsa-sha2-nistp521"
 	KeyAlgoED25519     = "ssh-ed25519"
 	KeyAlgoSKED25519   = "sk-ssh-ed25519@openssh.com"
+	KeyAlgoSM2         = "sm2"
 
 	// KeyAlgoRSASHA256 and KeyAlgoRSASHA512 are only public key algorithms, not
 	// public key formats, so they can't appear as a PublicKey.Type. The
@@ -83,6 +86,8 @@ func parsePubKey(in []byte, algo string) (pubKey PublicKey, rest []byte, err err
 		return parseED25519(in)
 	case KeyAlgoSKED25519:
 		return parseSKEd25519(in)
+	case KeyAlgoSM2:
+		return parseSM2(in)
 	case CertAlgoRSAv01, InsecureCertAlgoDSAv01, CertAlgoECDSA256v01, CertAlgoECDSA384v01, CertAlgoECDSA521v01, CertAlgoSKECDSA256v01, CertAlgoED25519v01, CertAlgoSKED25519v01:
 		cert, err := parseCert(in, certKeyAlgoNames[algo])
 		if err != nil {
@@ -1097,6 +1102,8 @@ func (k *skEd25519PublicKey) CryptoPublicKey() crypto.PublicKey {
 // P-521. DSA keys must use parameter size L1024N160.
 func NewSignerFromKey(key interface{}) (Signer, error) {
 	switch key := key.(type) {
+	case *sm2.PrivateKey:
+		return &sm2Signer{key: key}, nil
 	case crypto.Signer:
 		return NewSignerFromSigner(key)
 	case *dsa.PrivateKey:
@@ -1211,6 +1218,9 @@ func NewPublicKey(key interface{}) (PublicKey, error) {
 	case *rsa.PublicKey:
 		return (*rsaPublicKey)(key), nil
 	case *ecdsa.PublicKey:
+		if sm2.IsSM2PublicKey(key) {
+			return &sm2PublicKey{key: *key}, nil
+		}
 		if !supportedEllipticCurve(key.Curve) {
 			return nil, errors.New("ssh: only P-256, P-384 and P-521 EC keys are supported")
 		}

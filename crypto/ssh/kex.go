@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"math/big"
 	"slices"
@@ -53,6 +54,11 @@ type kexResult struct {
 	// level of the key exchange algorithm. It is used for
 	// calculating H, and for deriving keys from H and K.
 	Hash crypto.Hash
+
+	// HashFunc overrides Hash.New() for key derivation when using
+	// non-standard hash functions (e.g., SM3) that cannot be
+	// registered via crypto.RegisterHash.
+	HashFunc func() hash.Hash
 
 	// The session ID, which is the first H computed. This is used
 	// to derive key material inside the transport.
@@ -409,6 +415,8 @@ func init() {
 	kexAlgoMap[KeyExchangeECDHP521] = &ecdh{elliptic.P521()}
 	kexAlgoMap[KeyExchangeECDHP384] = &ecdh{elliptic.P384()}
 	kexAlgoMap[KeyExchangeECDHP256] = &ecdh{elliptic.P256()}
+	kexAlgoMap[KeyExchangeECDHSM2P256SM3] = &sm2ECDH{}
+	kexAlgoMap[KeyExchangeSM2SM3] = &sm2ECDH{}
 
 	if fips140.Enabled() {
 		defaultKexAlgos = slices.DeleteFunc(defaultKexAlgos, func(algo string) bool {

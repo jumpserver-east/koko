@@ -28,11 +28,21 @@ const (
 
 var (
 	supportedMACs = []string{"hmac-sha2-256-etm@openssh.com",
-		"hmac-sha2-256", "hmac-sha1"}
+		"hmac-sha2-256", "hmac-sha1",
+		"hmac-sm3", "hmac-sm3-96",
+	}
 
 	supportedKexAlgos = []string{
 		"curve25519-sha256", "curve25519-sha256@libssh.org",
 		"ecdh-sha2-nistp256", "ecdh-sha2-nistp384", "ecdh-sha2-nistp521",
+		"ecdh-sm2p256v1-sm3", "sm2-sm3",
+	}
+
+	supportedCiphers = []string{
+		"aes128-gcm@openssh.com", "aes256-gcm@openssh.com",
+		"chacha20-poly1305@openssh.com",
+		"aes128-ctr", "aes192-ctr", "aes256-ctr",
+		"sm4-ctr", "sm4-gcm",
 	}
 )
 
@@ -68,16 +78,25 @@ func NewSSHServer(jmsService *service.JMService) *Server {
 	if err != nil {
 		logger.Fatalf("Parse Terminal private key failed: %s\n", err)
 	}
+	sm2Signer, err := GenerateSM2HostKey()
+	if err != nil {
+		logger.Errorf("Generate SM2 host key failed: %s", err)
+	}
+	hostSigners := []ssh.Signer{singer, sm2Signer}
 	sshHandler := handler.NewServer(termCfg, jmsService)
 	srv := &ssh.Server{
 		Addr:             addr,
 		PasswordHandler:  sshHandler.PasswordAuth,
 		PublicKeyHandler: sshHandler.PublicKeyAuth,
 		Version:          "JumpServer",
-		HostSigners:      []ssh.Signer{singer},
+		HostSigners:      hostSigners,
 		MaxSessions:      int32(cf.SshMaxSessions),
 		ServerConfigCallback: func(ctx ssh.Context) *gossh.ServerConfig {
-			cfg := gossh.Config{MACs: supportedMACs, KeyExchanges: supportedKexAlgos}
+			cfg := gossh.Config{
+				MACs:         supportedMACs,
+				KeyExchanges: supportedKexAlgos,
+				Ciphers:      supportedCiphers,
+			}
 			return &gossh.ServerConfig{Config: cfg}
 		},
 		Handler:                       sshHandler.SessionHandler,

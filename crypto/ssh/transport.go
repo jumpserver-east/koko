@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 )
@@ -280,7 +281,12 @@ func newPacketCipher(d direction, algs DirectionAlgorithms, kex *kexResult) (pac
 func generateKeyMaterial(out, tag []byte, r *kexResult) {
 	var digestsSoFar []byte
 
-	h := r.Hash.New()
+	var h hash.Hash
+	if r.HashFunc != nil {
+		h = r.HashFunc()
+	} else {
+		h = r.Hash.New()
+	}
 	for len(out) > 0 {
 		h.Reset()
 		h.Write(r.K)

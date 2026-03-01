@@ -276,7 +276,7 @@ func createSSHConfig() gossh.Config {
 	cfg.SetDefaults()
 	algos := gossh.SupportedAlgorithms()
 	insecureAlgos := gossh.InsecureAlgorithms()
-	ciphers := make([]string, 0, len(algos.Ciphers)+len(insecureAlgos.Ciphers))
+	ciphers := make([]string, 0, len(algos.Ciphers)+len(insecureAlgos.Ciphers)+2)
 	/*
 		Change the ciphers order, placing aes128-ctr first.
 		Compatible with old ssh servers.
@@ -284,9 +284,11 @@ func createSSHConfig() gossh.Config {
 	ciphers = append(ciphers, gossh.CipherAES128CTR)
 	ciphers = append(ciphers, insecureAlgos.Ciphers...)
 	ciphers = append(ciphers, algos.Ciphers...)
-	keyExchanges := make([]string, 0, len(algos.KeyExchanges)+len(insecureAlgos.KeyExchanges))
+	ciphers = append(ciphers, gossh.CipherSM4CTR, gossh.CipherSM4GCM)
+	keyExchanges := make([]string, 0, len(algos.KeyExchanges)+len(insecureAlgos.KeyExchanges)+2)
 	keyExchanges = append(keyExchanges, insecureAlgos.KeyExchanges...)
 	keyExchanges = append(keyExchanges, algos.KeyExchanges...)
+	keyExchanges = append(keyExchanges, gossh.KeyExchangeECDHSM2P256SM3, gossh.KeyExchangeSM2SM3)
 	cfg.Ciphers = ciphers
 	cfg.KeyExchanges = keyExchanges
 	return cfg
