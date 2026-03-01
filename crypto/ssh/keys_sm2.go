@@ -92,6 +92,15 @@ type sm2Signer struct {
 	key *sm2.PrivateKey
 }
 
+// SM2Decrypter is implemented by SM2 signers that can also decrypt.
+type SM2Decrypter interface {
+	SM2Decrypt(ciphertext []byte) ([]byte, error)
+}
+
+func (s *sm2Signer) SM2Decrypt(ciphertext []byte) ([]byte, error) {
+	return sm2.Decrypt(s.key, ciphertext)
+}
+
 func (s *sm2Signer) PublicKey() PublicKey {
 	return &sm2PublicKey{key: s.key.PublicKey}
 }

@@ -63,6 +63,11 @@ type kexResult struct {
 	// The session ID, which is the first H computed. This is used
 	// to derive key material inside the transport.
 	SessionID []byte
+
+	// SignedData: the actual data signed by the server. When non-nil,
+	// it is used for signature verification instead of H.
+	// GM/T 0129 signs random_client||random_server, not H.
+	SignedData []byte
 }
 
 // handshakeMagics contains data that is always included in the
@@ -416,7 +421,7 @@ func init() {
 	kexAlgoMap[KeyExchangeECDHP384] = &ecdh{elliptic.P384()}
 	kexAlgoMap[KeyExchangeECDHP256] = &ecdh{elliptic.P256()}
 	kexAlgoMap[KeyExchangeECDHSM2P256SM3] = &sm2ECDH{}
-	kexAlgoMap[KeyExchangeSM2SM3] = &sm2ECDH{}
+	kexAlgoMap[KeyExchangeSM2SM3] = &gmt0129KEX{}
 
 	if fips140.Enabled() {
 		defaultKexAlgos = slices.DeleteFunc(defaultKexAlgos, func(algo string) bool {

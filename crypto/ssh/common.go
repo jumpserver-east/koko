@@ -43,6 +43,7 @@ const (
 	InsecureCipherRC4256       = "arcfour256"
 	CipherSM4CTR               = "sm4-ctr"
 	CipherSM4GCM               = "sm4-gcm"
+	CipherSM4CBC               = "sm4-cbc"
 )
 
 // The key exchanges currently or previously implemented by this library, to use
@@ -85,6 +86,7 @@ const (
 	InsecureHMACSHA196 = "hmac-sha1-96"
 	HMACSM3            = "hmac-sm3"
 	HMACSM396          = "hmac-sm3-96"
+	CBCMAC             = "cbc-mac"
 )
 
 var (
@@ -131,6 +133,7 @@ var (
 		CipherAES256CTR,
 		CipherSM4CTR,
 		CipherSM4GCM,
+		CipherSM4CBC,
 	}
 	// defaultCiphers specifies the default preference for ciphers algorithms
 	// in preference order.
@@ -153,6 +156,7 @@ var (
 		HMACSHA512,
 		HMACSHA1,
 		HMACSM3,
+		CBCMAC,
 	}
 	// defaultMACs specifies the default preference for MAC algorithms in
 	// preference order.
@@ -452,7 +456,7 @@ func (a *DirectionAlgorithms) rekeyBytes() int64 {
 	// 2^(BLOCKSIZE/4) blocks. For all AES flavors BLOCKSIZE is
 	// 128.
 	switch a.Cipher {
-	case CipherAES128CTR, CipherAES192CTR, CipherAES256CTR, CipherAES128GCM, CipherAES256GCM, InsecureCipherAES128CBC, CipherSM4CTR, CipherSM4GCM:
+	case CipherAES128CTR, CipherAES192CTR, CipherAES256CTR, CipherAES128GCM, CipherAES256GCM, InsecureCipherAES128CBC, CipherSM4CTR, CipherSM4GCM, CipherSM4CBC:
 		return 16 * (1 << 32)
 
 	}

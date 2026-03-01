@@ -126,7 +126,11 @@ func verifyHostKeySignature(hostKey PublicKey, algo string, result *kexResult) e
 		return fmt.Errorf("ssh: invalid signature algorithm %q, expected %q", sig.Format, a)
 	}
 
-	return hostKey.Verify(result.H, sig)
+	dataToVerify := result.H
+	if result.SignedData != nil {
+		dataToVerify = result.SignedData
+	}
+	return hostKey.Verify(dataToVerify, sig)
 }
 
 // NewSession opens a new Session for this client. (A session is a remote

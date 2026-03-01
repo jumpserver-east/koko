@@ -284,13 +284,14 @@ func createSSHConfig() gossh.Config {
 	ciphers = append(ciphers, gossh.CipherAES128CTR)
 	ciphers = append(ciphers, insecureAlgos.Ciphers...)
 	ciphers = append(ciphers, algos.Ciphers...)
-	ciphers = append(ciphers, gossh.CipherSM4CTR, gossh.CipherSM4GCM)
+	ciphers = append(ciphers, gossh.CipherSM4CTR, gossh.CipherSM4GCM, gossh.CipherSM4CBC)
 	keyExchanges := make([]string, 0, len(algos.KeyExchanges)+len(insecureAlgos.KeyExchanges)+2)
 	keyExchanges = append(keyExchanges, insecureAlgos.KeyExchanges...)
 	keyExchanges = append(keyExchanges, algos.KeyExchanges...)
 	keyExchanges = append(keyExchanges, gossh.KeyExchangeECDHSM2P256SM3, gossh.KeyExchangeSM2SM3)
 	cfg.Ciphers = ciphers
 	cfg.KeyExchanges = keyExchanges
+	cfg.MACs = append(cfg.MACs, gossh.HMACSM3, gossh.CBCMAC)
 	return cfg
 }
 

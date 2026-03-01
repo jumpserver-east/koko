@@ -30,6 +30,7 @@ var (
 	supportedMACs = []string{"hmac-sha2-256-etm@openssh.com",
 		"hmac-sha2-256", "hmac-sha1",
 		"hmac-sm3", "hmac-sm3-96",
+		"cbc-mac",
 	}
 
 	supportedKexAlgos = []string{
@@ -42,7 +43,7 @@ var (
 		"aes128-gcm@openssh.com", "aes256-gcm@openssh.com",
 		"chacha20-poly1305@openssh.com",
 		"aes128-ctr", "aes192-ctr", "aes256-ctr",
-		"sm4-ctr", "sm4-gcm",
+		"sm4-ctr", "sm4-gcm", "sm4-cbc",
 	}
 )
 

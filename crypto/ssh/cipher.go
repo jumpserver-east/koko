@@ -121,6 +121,7 @@ func init() {
 	cipherModes[CipherAES256GCM] = &cipherMode{32, 12, newGCMCipher}
 	cipherModes[CipherSM4CTR] = &cipherMode{16, sm4.BlockSize, streamCipherMode(0, newSM4CTR)}
 	cipherModes[CipherSM4GCM] = &cipherMode{16, 12, newSM4GCMCipher}
+	cipherModes[CipherSM4CBC] = &cipherMode{16, sm4.BlockSize, newSM4CBCCipher}
 
 	if fips140.Enabled() {
 		defaultCiphers = slices.DeleteFunc(defaultCiphers, func(algo string) bool {
@@ -500,6 +501,15 @@ func newTripleDESCBCCipher(key, iv, macKey []byte, algs DirectionAlgorithms) (pa
 	}
 
 	return cbc, nil
+}
+
+func newSM4CBCCipher(key, iv, macKey []byte, algs DirectionAlgorithms) (packetCipher, error) {
+	c, err := sm4.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+
+	return newCBCCipher(c, key, iv, macKey, algs)
 }
 
 func maxUInt32(a, b int) uint32 {

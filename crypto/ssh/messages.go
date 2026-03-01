@@ -363,6 +363,33 @@ type pongMsg struct {
 	Data string `sshtype:"193"`
 }
 
+// GM/T 0129-2023 key exchange messages.
+const (
+	msgGMKexRequest = 200
+	msgGMKexReply   = 201
+	msgGMKex        = 202
+)
+
+// GM/T 0129-2023 user auth messages (reserved).
+const (
+	msgGMUserAuthChallenge = 210
+	msgGMUserAuthRespond   = 211
+)
+
+type gmKexRequestMsg struct {
+	RandomClient []byte `sshtype:"200"`
+}
+
+type gmKexReplyMsg struct {
+	HostKey      []byte `sshtype:"201"`
+	RandomServer []byte
+	Signature    []byte
+}
+
+type gmKexMsg struct {
+	EncryptedK []byte `sshtype:"202"`
+}
+
 // typeTags returns the possible type bytes for the given reflect.Type, which
 // should be a struct. The possible values are separated by a '|' character.
 func typeTags(structType reflect.Type) (tags []byte) {
