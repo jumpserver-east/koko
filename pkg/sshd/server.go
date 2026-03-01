@@ -36,7 +36,7 @@ var (
 	supportedKexAlgos = []string{
 		"curve25519-sha256", "curve25519-sha256@libssh.org",
 		"ecdh-sha2-nistp256", "ecdh-sha2-nistp384", "ecdh-sha2-nistp521",
-		"ecdh-sm2p256v1-sm3", "sm2-sm3",
+		"ecdh-sm2p256v1-sm3", "sm2-sm3", "gmt0129-sm2-sm3",
 	}
 
 	supportedCiphers = []string{

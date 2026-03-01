@@ -16,7 +16,7 @@ import (
 
 // debugTransport if set, will print packet types as they go over the
 // wire. No message decoding is done, to minimize the impact on timing.
-const debugTransport = false
+const debugTransport = true
 
 // packetConn represents a transport that implements packet based
 // operations.
