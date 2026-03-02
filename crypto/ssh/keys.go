@@ -1664,6 +1664,41 @@ func parseOpenSSHPrivateKey(key []byte, decrypt openSSHDecryptFunc) (crypto.Priv
 			},
 			D: key.D,
 		}, nil
+	case KeyAlgoSM2:
+		var key openSSHECDSAPrivateKey
+		if err := Unmarshal(pk1.Rest, &key); err != nil {
+			return nil, err
+		}
+
+		if err := checkOpenSSHKeyPadding(key.Pad); err != nil {
+			return nil, err
+		}
+
+		curve := sm2.P256()
+		X, Y := elliptic.Unmarshal(curve, key.Pub)
+		if X == nil || Y == nil {
+			return nil, errors.New("ssh: failed to unmarshal SM2 public key")
+		}
+
+		if key.D.Cmp(curve.Params().N) >= 0 {
+			return nil, errors.New("ssh: scalar is out of range")
+		}
+
+		x, y := curve.ScalarBaseMult(key.D.Bytes())
+		if x.Cmp(X) != 0 || y.Cmp(Y) != 0 {
+			return nil, errors.New("ssh: SM2 public key does not match private key")
+		}
+
+		return &sm2.PrivateKey{
+			PrivateKey: ecdsa.PrivateKey{
+				PublicKey: ecdsa.PublicKey{
+					Curve: curve,
+					X:     X,
+					Y:     Y,
+				},
+				D: key.D,
+			},
+		}, nil
 	default:
 		return nil, errors.New("ssh: unhandled key type")
 	}
@@ -1737,6 +1772,28 @@ func marshalOpenSSHPrivateKey(key crypto.PrivateKey, comment string, encrypt ope
 			Comment: comment,
 		}
 		pk1.Keytype = KeyAlgoED25519
+		pk1.Rest = Marshal(key)
+	case *sm2.PrivateKey:
+		pub := elliptic.Marshal(k.Curve, k.PublicKey.X, k.PublicKey.Y)
+
+		// Marshal public key.
+		pubKey := struct {
+			KeyType string
+			Curve   string
+			Pub     []byte
+		}{
+			KeyAlgoSM2, sm2CurveName, pub,
+		}
+		w.PubKey = Marshal(pubKey)
+
+		// Marshal private key.
+		key := openSSHECDSAPrivateKey{
+			Curve:   sm2CurveName,
+			Pub:     pub,
+			D:       k.D,
+			Comment: comment,
+		}
+		pk1.Keytype = KeyAlgoSM2
 		pk1.Rest = Marshal(key)
 	case *ecdsa.PrivateKey:
 		var curve, keyType string
