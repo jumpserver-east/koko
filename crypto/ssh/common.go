@@ -64,9 +64,7 @@ const (
 	// KeyExchangeMLKEM768X25519 is supported from Go 1.24.
 	KeyExchangeMLKEM768X25519 = "mlkem768x25519-sha256"
 
-	KeyExchangeECDHSM2P256SM3    = "ecdh-sm2p256v1-sm3"
-	KeyExchangeSM2SM3            = "sm2-sm3"
-	KeyExchangeGMT0129SM2SM3     = "gmt0129-sm2-sm3"
+	KeyExchangeSM2SM3 = "sm2-sm3"
 
 	// An alias for KeyExchangeCurve25519SHA256. This kex ID will be added if
 	// KeyExchangeCurve25519SHA256 is requested for backward compatibility with
@@ -86,7 +84,6 @@ const (
 	HMACSHA1           = "hmac-sha1"
 	InsecureHMACSHA196 = "hmac-sha1-96"
 	HMACSM3            = "hmac-sm3"
-	HMACSM396          = "hmac-sm3-96"
 	CBCMAC             = "cbc-mac"
 )
 
@@ -102,9 +99,7 @@ var (
 		KeyExchangeDH14SHA256,
 		KeyExchangeDH16SHA512,
 		KeyExchangeDHGEXSHA256,
-		KeyExchangeECDHSM2P256SM3,
 		KeyExchangeSM2SM3,
-		KeyExchangeGMT0129SM2SM3,
 	}
 	// defaultKexAlgos specifies the default preference for key-exchange
 	// algorithms in preference order.
@@ -174,7 +169,6 @@ var (
 	// package and which have security issues.
 	insecureMACs = []string{
 		InsecureHMACSHA196,
-		HMACSM396,
 	}
 	// supportedHostKeyAlgos specifies the supported host-key algorithms (i.e.
 	// methods of authenticating servers) implemented by this package in
@@ -234,6 +228,7 @@ var (
 		KeyAlgoECDSA521,
 		KeyAlgoRSASHA256,
 		KeyAlgoRSASHA512,
+		KeyAlgoSM2,
 	}
 
 	// defaultPubKeyAuthAlgos specifies the preferred client public key
@@ -248,6 +243,7 @@ var (
 		KeyAlgoECDSA521,
 		KeyAlgoRSASHA256,
 		KeyAlgoRSASHA512,
+		KeyAlgoSM2,
 		KeyAlgoRSA,
 		InsecureKeyAlgoDSA,
 	}

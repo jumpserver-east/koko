@@ -370,11 +370,42 @@ const (
 	msgGMKex        = 202
 )
 
-// GM/T 0129-2023 user auth messages (reserved).
+// GM/T 0129-2023 user auth messages.
 const (
 	msgGMUserAuthChallenge = 210
 	msgGMUserAuthRespond   = 211
 )
+
+// msgGMUserAuthChallenge is sent by the server to challenge the client during
+// authentication.
+type gmUserAuthChallengeMsg struct {
+	Challenge   []byte `sshtype:"210"`
+	Salt        []byte
+	Certificate []byte
+	Signature   []byte
+}
+
+// gmUserAuthRespondMsg is sent by the client for public_key or certificate auth (GM/T 0129-2023).
+// Wire format: user_name | service_name | method | response | public_key_algorithm_name | public_key_blob
+type gmUserAuthRespondMsg struct {
+	UserName      string `sshtype:"211"`
+	ServiceName   string
+	Method        string
+	Response      []byte
+	AlgorithmName string
+	PublicKeyBlob []byte
+}
+
+// gmUserAuthPasswordRespondMsg is sent by the client for password auth (GM/T 0129-2023).
+// Wire format: user_name | service_name | method | response | algorithm_name
+// response = SM3(challenge ‖ SM3(password) ‖ salt)
+type gmUserAuthPasswordRespondMsg struct {
+	UserName      string `sshtype:"211"`
+	ServiceName   string
+	Method        string
+	Response      []byte
+	AlgorithmName string
+}
 
 type gmKexRequestMsg struct {
 	RandomClient []byte `sshtype:"200"`
@@ -839,6 +870,12 @@ func decode(packet []byte) (interface{}, error) {
 		msg = new(kexDHInitMsg)
 	case msgKexDHReply:
 		msg = new(kexDHReplyMsg)
+	case msgGMKexRequest:
+		msg = new(gmKexRequestMsg)
+	case msgGMKexReply:
+		msg = new(gmKexReplyMsg)
+	case msgGMKex:
+		msg = new(gmKexMsg)
 	case msgUserAuthRequest:
 		msg = new(userAuthRequestMsg)
 	case msgUserAuthSuccess:
@@ -849,6 +886,10 @@ func decode(packet []byte) (interface{}, error) {
 		msg = new(userAuthBannerMsg)
 	case msgUserAuthPubKeyOk:
 		msg = new(userAuthPubKeyOkMsg)
+	case msgGMUserAuthChallenge:
+		msg = new(gmUserAuthChallengeMsg)
+	case msgGMUserAuthRespond:
+		msg = new(gmUserAuthRespondMsg)
 	case msgGlobalRequest:
 		msg = new(globalRequestMsg)
 	case msgRequestSuccess:
@@ -900,10 +941,15 @@ var packetTypeNames = map[byte]string{
 	msgKexInit:             "kexInitMsg",
 	msgKexDHInit:           "kexDHInitMsg",
 	msgKexDHReply:          "kexDHReplyMsg",
+	msgGMKexRequest:        "gmKexRequestMsg",
+	msgGMKexReply:          "gmKexReplyMsg",
+	msgGMKex:               "gmKexMsg",
 	msgUserAuthRequest:     "userAuthRequestMsg",
 	msgUserAuthSuccess:     "userAuthSuccessMsg",
 	msgUserAuthFailure:     "userAuthFailureMsg",
 	msgUserAuthPubKeyOk:    "userAuthPubKeyOkMsg",
+	msgGMUserAuthChallenge: "gmUserAuthChallengeMsg",
+	msgGMUserAuthRespond:   "gmUserAuthRespondMsg",
 	msgGlobalRequest:       "globalRequestMsg",
 	msgRequestSuccess:      "globalRequestSuccessMsg",
 	msgRequestFailure:      "globalRequestFailureMsg",

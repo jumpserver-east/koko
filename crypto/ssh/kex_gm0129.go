@@ -86,7 +86,7 @@ func (kex *gmt0129KEX) Client(c packetConn, rand io.Reader, magics *handshakeMag
 	}
 
 	// 8. Compute H = SM3(random_client || random_server || host_key || K)
-	// H uses raw K bytes per GM/T 0129 §8.5.3
+	// H uses raw K bytes.
 	h := sm3.New()
 	h.Write(randomClient)
 	h.Write(reply.RandomServer)
@@ -98,7 +98,7 @@ func (kex *gmt0129KEX) Client(c packetConn, rand io.Reader, magics *handshakeMag
 	signedData = append(signedData, randomClient...)
 	signedData = append(signedData, reply.RandomServer...)
 
-	// K in mpint format for key derivation per GM/T 0129 §8.5.3
+	// K in mpint format for key derivation.
 	ki := new(big.Int).SetBytes(sessionKey)
 	K := make([]byte, intLength(ki))
 	marshalInt(K, ki)
@@ -181,14 +181,14 @@ func (kex *gmt0129KEX) Server(c packetConn, rand io.Reader, magics *handshakeMag
 	}
 
 	// 7. Compute H = SM3(random_client || random_server || host_key || K)
-	// H uses raw K bytes per GM/T 0129 §8.5.3
+	// H uses raw K bytes.
 	h := sm3.New()
 	h.Write(req.RandomClient)
 	h.Write(randomServer)
 	h.Write(hostKeyBytes)
 	h.Write(sessionKey)
 
-	// K in mpint format for key derivation per GM/T 0129 §8.5.3
+	// K in mpint format for key derivation.
 	ki := new(big.Int).SetBytes(sessionKey)
 	K := make([]byte, intLength(ki))
 	marshalInt(K, ki)

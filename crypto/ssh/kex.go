@@ -420,9 +420,7 @@ func init() {
 	kexAlgoMap[KeyExchangeECDHP521] = &ecdh{elliptic.P521()}
 	kexAlgoMap[KeyExchangeECDHP384] = &ecdh{elliptic.P384()}
 	kexAlgoMap[KeyExchangeECDHP256] = &ecdh{elliptic.P256()}
-	kexAlgoMap[KeyExchangeECDHSM2P256SM3] = &sm2ECDH{}
-	kexAlgoMap[KeyExchangeSM2SM3] = &sm2ECDH{}
-	kexAlgoMap[KeyExchangeGMT0129SM2SM3] = &gmt0129KEX{}
+	kexAlgoMap[KeyExchangeSM2SM3] = &gmt0129KEX{}
 
 	if fips140.Enabled() {
 		defaultKexAlgos = slices.DeleteFunc(defaultKexAlgos, func(algo string) bool {

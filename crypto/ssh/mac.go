@@ -86,9 +86,6 @@ func init() {
 	macModes[HMACSM3] = &macMode{32, false, func(key []byte) hash.Hash {
 		return hmac.New(sm3.New, key)
 	}}
-	macModes[HMACSM396] = &macMode{32, false, func(key []byte) hash.Hash {
-		return truncatingMAC{12, hmac.New(sm3.New, key)}
-	}}
 	macModes[CBCMAC] = &macMode{16, false, func(key []byte) hash.Hash {
 		return newCBCMAC(key)
 	}}

@@ -17,6 +17,7 @@ import (
 const sm2CurveName = "sm2"
 
 // sm2PublicKey implements the PublicKey interface for SM2 keys.
+// 符合 GM/T 0009-2012 和 GM/T 0129-2023 规范
 type sm2PublicKey struct {
 	key ecdsa.PublicKey
 }
@@ -45,15 +46,37 @@ func (k *sm2PublicKey) Verify(data []byte, sig *Signature) error {
 		return errors.New("ssh: signature type mismatch for SM2 key")
 	}
 
-	// sig.Blob contains ASN.1 DER encoded SM2 signature
+	// 使用 GM/T 0009-2012 规范的 SM2 签名验证
 	if !sm2.VerifyASN1WithSM2(&k.key, nil, data, sig.Blob) {
 		return errors.New("ssh: SM2 signature verification failed")
 	}
+
 	return nil
 }
 
 func (k *sm2PublicKey) CryptoPublicKey() crypto.PublicKey {
 	return &k.key
+}
+
+// 辅助方法：获取 SM2 密钥的压缩格式
+func (k *sm2PublicKey) MarshalCompressed() []byte {
+	// SM2 压缩格式：1字节前缀(0x02或0x03) + x坐标
+	prefix := byte(0x02)
+	if k.key.Y.Bit(0) != 0 {
+		prefix = 0x03
+	}
+
+	xBytes := k.key.X.Bytes()
+	if len(xBytes) < 32 {
+		// 确保长度为 32 字节，左填充零
+		padding := make([]byte, 32-len(xBytes))
+		xBytes = append(padding, xBytes...)
+	} else if len(xBytes) > 32 {
+		// 截取前 32 字节
+		xBytes = xBytes[len(xBytes)-32:]
+	}
+
+	return append([]byte{prefix}, xBytes...)
 }
 
 // parseSM2 parses an SM2 public key from SSH wire format.
@@ -106,12 +129,30 @@ func (s *sm2Signer) PublicKey() PublicKey {
 }
 
 func (s *sm2Signer) Sign(rand io.Reader, data []byte) (*Signature, error) {
-	// Use SM2-specific signing with default UID (forceGMSign=true).
-	// This treats data as the raw message and internally computes ZA hash.
+	// 使用 GM/T 0009-2012 规范的 SM2 签名
+	// 使用默认的SM2签名选项，确保兼容性
 	sig, err := s.key.Sign(rand, data, sm2.DefaultSM2SignerOpts)
 	if err != nil {
 		return nil, err
 	}
+	return &Signature{
+		Format: KeyAlgoSM2,
+		Blob:   sig,
+	}, nil
+}
+
+// 为GM/T 0129-2023规范优化的签名方法
+func (s *sm2Signer) SignWithGM129(rand io.Reader, data []byte) (*Signature, error) {
+	// 对于GM/T 0129-2023，我们使用固定的UID：1234567812345678
+	const gm129UID = "1234567812345678"
+
+	opts := sm2.NewSM2SignerOption(true, []byte(gm129UID))
+
+	sig, err := s.key.Sign(rand, data, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Signature{
 		Format: KeyAlgoSM2,
 		Blob:   sig,

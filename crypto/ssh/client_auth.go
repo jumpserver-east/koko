@@ -11,6 +11,8 @@ import (
 	"io"
 	"slices"
 	"strings"
+
+	"github.com/emmansun/gmsm/sm3"
 )
 
 type authResult int
@@ -486,6 +488,23 @@ func handleAuthResponse(c packetConn) (authResult, []string, error) {
 			return authFailure, msg.Methods, nil
 		case msgUserAuthSuccess:
 			return authSuccess, nil, nil
+		case msgGMUserAuthChallenge:
+			// 这里处理服务端发送的挑战消息
+			var challenge gmUserAuthChallengeMsg
+			if err := Unmarshal(packet, &challenge); err != nil {
+				return authFailure, nil, err
+			}
+			// 对于挑战消息，我们需要根据具体的认证方法（密码、公钥、证书）来实现响应逻辑
+			// 目前我们返回特定的错误，以便调用者可以识别这是一个 GM 认证挑战
+			return authFailure, []string{"gmt0129"}, fmt.Errorf("ssh: GM user auth challenge received, but no GM auth method configured")
+		case msgGMUserAuthRespond:
+			// 这里处理客户端发送的响应消息（在服务器端）
+			var respond gmUserAuthRespondMsg
+			if err := Unmarshal(packet, &respond); err != nil {
+				return authFailure, nil, err
+			}
+			// 在客户端，我们不应该接收到这个消息
+			return authFailure, nil, unexpectedMessageError(msgUserAuthSuccess, packet[0])
 		default:
 			return authFailure, nil, unexpectedMessageError(msgUserAuthSuccess, packet[0])
 		}
@@ -518,6 +537,216 @@ func handleBannerResponse(c packetConn, packet []byte) error {
 // printed.  RFC 4256 section 3.3 details how the UI should behave for
 // both CLI and GUI environments.
 type KeyboardInteractiveChallenge func(name, instruction string, questions []string, echos []bool) (answers []string, err error)
+
+// GMUserAuth is an AuthMethod that implements GM/T 0129-2023 user authentication
+// using an SM2 key pair.
+type GMUserAuth struct {
+	signer Signer
+}
+
+// buildGM0129SignedData constructs the signed data for GM/T 0129-2023 public_key
+//
+//	session_id (string) | SSH_MSG_USERAUTH_REQUEST (byte=50) | user_name (string) |
+//	service_name (string) | method (string) | challenge (string) |
+//	public_key_algorithm_name (string) | public_key_blob (string)
+func buildGM0129SignedData(sessionID []byte, user, service, method string, challenge, pubKeyBlob []byte) []byte {
+	var b struct {
+		SessionID  []byte
+		MsgType    byte
+		User       string
+		Service    string
+		Method     string
+		Challenge  []byte
+		AlgoName   string
+		PubKeyBlob []byte
+	}
+	b.SessionID = sessionID
+	b.MsgType = msgUserAuthRequest // 50
+	b.User = user
+	b.Service = service
+	b.Method = method
+	b.Challenge = challenge
+	b.AlgoName = KeyAlgoSM2 // "sm2"
+	b.PubKeyBlob = pubKeyBlob
+	return Marshal(&b)
+}
+
+func (g *GMUserAuth) auth(session []byte, user string, c packetConn, rand io.Reader, extensions map[string][]byte) (authResult, []string, error) {
+	// Send SSH_MSG_USERAUTH_REQUEST per GM/T 0129-2023
+	if err := c.writePacket(Marshal(&userAuthRequestMsg{
+		User:    user,
+		Service: serviceSSH, // "ssh-connection"
+		Method:  "public_key",
+	})); err != nil {
+		return authFailure, nil, err
+	}
+
+	for {
+		packet, err := c.readPacket()
+		if err != nil {
+			return authFailure, nil, err
+		}
+
+		switch packet[0] {
+		case msgUserAuthSuccess:
+			return authSuccess, nil, nil
+
+		case msgUserAuthFailure:
+			var msg userAuthFailureMsg
+			if err := Unmarshal(packet, &msg); err != nil {
+				return authFailure, nil, err
+			}
+			if msg.PartialSuccess {
+				return authPartialSuccess, msg.Methods, nil
+			}
+			return authFailure, msg.Methods, nil
+
+		case msgGMUserAuthChallenge:
+			var challenge gmUserAuthChallengeMsg
+			if err := Unmarshal(packet, &challenge); err != nil {
+				return authFailure, nil, err
+			}
+
+			if g.signer == nil {
+				return authFailure, nil, fmt.Errorf("ssh: GM/T 0129 user auth challenge received, but no SM2 signer configured")
+			}
+
+			pubKeyBlob := g.signer.PublicKey().Marshal()
+
+			// Build signed data per GM/T 0129-2023nd sign it.
+			signedData := buildGM0129SignedData(session, user, serviceSSH, "public_key", challenge.Challenge, pubKeyBlob)
+			sig, err := g.signer.Sign(rand, signedData)
+			if err != nil {
+				return authFailure, nil, err
+			}
+
+			if err := c.writePacket(Marshal(&gmUserAuthRespondMsg{
+				UserName:      user,
+				ServiceName:   serviceSSH,
+				Method:        "public_key",
+				Response:      sig.Blob,
+				AlgorithmName: KeyAlgoSM2,
+				PublicKeyBlob: pubKeyBlob,
+			})); err != nil {
+				return authFailure, nil, err
+			}
+			continue
+
+		case msgGMUserAuthRespond:
+			return authFailure, nil, unexpectedMessageError(msgUserAuthSuccess, packet[0])
+
+		case msgUserAuthBanner:
+			if err := handleBannerResponse(c, packet); err != nil {
+				return authFailure, nil, err
+			}
+			continue
+
+		case msgExtInfo:
+			continue
+
+		default:
+			return authFailure, nil, unexpectedMessageError(msgUserAuthSuccess, packet[0])
+		}
+	}
+}
+
+func (g *GMUserAuth) method() string {
+	return "public_key"
+}
+
+// GMUserAuthSigner returns an AuthMethod that uses an SM2 signer for GM/T 0129-2023
+func GMUserAuthSigner(signer Signer) AuthMethod {
+	return &GMUserAuth{
+		signer: signer,
+	}
+}
+
+// GMPasswordAuth is an AuthMethod that implements GM/T 0129-2023
+// response = SM3(challenge ‖ SM3(password) ‖ salt)
+type GMPasswordAuth struct {
+	password string
+}
+
+func (g *GMPasswordAuth) method() string {
+	return "password"
+}
+
+func (g *GMPasswordAuth) auth(session []byte, user string, c packetConn, rand io.Reader, extensions map[string][]byte) (authResult, []string, error) {
+	if err := c.writePacket(Marshal(&userAuthRequestMsg{
+		User:    user,
+		Service: serviceSSH,
+		Method:  "password",
+	})); err != nil {
+		return authFailure, nil, err
+	}
+
+	for {
+		packet, err := c.readPacket()
+		if err != nil {
+			return authFailure, nil, err
+		}
+
+		switch packet[0] {
+		case msgUserAuthSuccess:
+			return authSuccess, nil, nil
+
+		case msgUserAuthFailure:
+			var msg userAuthFailureMsg
+			if err := Unmarshal(packet, &msg); err != nil {
+				return authFailure, nil, err
+			}
+			if msg.PartialSuccess {
+				return authPartialSuccess, msg.Methods, nil
+			}
+			return authFailure, msg.Methods, nil
+
+		case msgGMUserAuthChallenge:
+			var challenge gmUserAuthChallengeMsg
+			if err := Unmarshal(packet, &challenge); err != nil {
+				return authFailure, nil, err
+			}
+
+			// response = SM3(challenge ‖ SM3(password) ‖ salt)
+			passwdHash := sm3.Sum([]byte(g.password))
+			h := sm3.New()
+			h.Write(challenge.Challenge)
+			h.Write(passwdHash[:])
+			h.Write(challenge.Salt)
+			response := h.Sum(nil)
+
+			if err := c.writePacket(Marshal(&gmUserAuthPasswordRespondMsg{
+				UserName:      user,
+				ServiceName:   serviceSSH,
+				Method:        "password",
+				Response:      response,
+				AlgorithmName: "sm3",
+			})); err != nil {
+				return authFailure, nil, err
+			}
+			continue
+
+		case msgGMUserAuthRespond:
+			return authFailure, nil, unexpectedMessageError(msgUserAuthSuccess, packet[0])
+
+		case msgUserAuthBanner:
+			if err := handleBannerResponse(c, packet); err != nil {
+				return authFailure, nil, err
+			}
+			continue
+
+		case msgExtInfo:
+			continue
+
+		default:
+			return authFailure, nil, unexpectedMessageError(msgUserAuthSuccess, packet[0])
+		}
+	}
+}
+
+// GMPassword returns an AuthMethod for GM/T 0129-2023 password authentication.
+func GMPassword(password string) AuthMethod {
+	return &GMPasswordAuth{password: password}
+}
 
 // KeyboardInteractive returns an AuthMethod using a prompt/response
 // sequence controlled by the server.

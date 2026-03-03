@@ -288,7 +288,7 @@ func createSSHConfig() gossh.Config {
 	keyExchanges := make([]string, 0, len(algos.KeyExchanges)+len(insecureAlgos.KeyExchanges)+2)
 	keyExchanges = append(keyExchanges, insecureAlgos.KeyExchanges...)
 	keyExchanges = append(keyExchanges, algos.KeyExchanges...)
-	keyExchanges = append(keyExchanges, gossh.KeyExchangeECDHSM2P256SM3, gossh.KeyExchangeSM2SM3, gossh.KeyExchangeGMT0129SM2SM3)
+	keyExchanges = append(keyExchanges, gossh.KeyExchangeSM2SM3)
 	cfg.Ciphers = ciphers
 	cfg.KeyExchanges = keyExchanges
 	cfg.MACs = append(cfg.MACs, gossh.HMACSM3, gossh.CBCMAC)
