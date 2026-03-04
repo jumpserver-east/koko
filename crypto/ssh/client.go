@@ -96,11 +96,14 @@ func (c *connection) clientHandshake(dialAddress string, config *ClientConfig) e
 	} else {
 		c.clientVersion = []byte(packageVersion)
 	}
+	debugf(debugLevel1, "Local version string: %s", c.clientVersion)
+
 	var err error
 	c.serverVersion, err = exchangeVersions(c.sshConn.conn, c.clientVersion)
 	if err != nil {
 		return err
 	}
+	debugf(debugLevel1, "Remote version string: %s", c.serverVersion)
 
 	c.transport = newClientTransport(
 		newTransport(c.sshConn.conn, config.Rand, true /* is client */),
@@ -111,6 +114,11 @@ func (c *connection) clientHandshake(dialAddress string, config *ClientConfig) e
 
 	c.sessionID = c.transport.getSessionID()
 	c.algorithms = c.transport.getAlgorithms()
+	debugf(debugLevel1, "KEX done: algorithm %s", c.algorithms.KeyExchange)
+	debugf(debugLevel1, "KEX done: host key algorithm %s", c.algorithms.HostKey)
+	debugf(debugLevel1, "KEX done: client->server cipher: %s MAC: %s", c.algorithms.Write.Cipher, c.algorithms.Write.MAC)
+	debugf(debugLevel1, "KEX done: server->client cipher: %s MAC: %s", c.algorithms.Read.Cipher, c.algorithms.Read.MAC)
+
 	return c.clientAuthenticate(config)
 }
 
@@ -128,9 +136,16 @@ func verifyHostKeySignature(hostKey PublicKey, algo string, result *kexResult) e
 
 	dataToVerify := result.H
 	if result.SignedData != nil {
+		debugf(debugLevel2, "host key verification: using SignedData (GM/T 0129 mode, %d bytes) instead of H", len(result.SignedData))
 		dataToVerify = result.SignedData
 	}
-	return hostKey.Verify(dataToVerify, sig)
+	debugf(debugLevel2, "host key verification: verifying %s signature", sig.Format)
+	if err := hostKey.Verify(dataToVerify, sig); err != nil {
+		debugf(debugLevel1, "host key verification: FAILED: %v", err)
+		return err
+	}
+	debugf(debugLevel1, "host key verification: OK")
+	return nil
 }
 
 // NewSession opens a new Session for this client. (A session is a remote

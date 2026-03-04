@@ -405,6 +405,7 @@ type gmUserAuthPasswordRespondMsg struct {
 	Method        string
 	Response      []byte
 	AlgorithmName string
+	Password      string
 }
 
 type gmKexRequestMsg struct {

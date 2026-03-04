@@ -26,6 +26,7 @@ const (
 // clientAuthenticate authenticates with the remote server. See RFC 4252.
 func (c *connection) clientAuthenticate(config *ClientConfig) error {
 	// initiate user auth session
+	debugf(debugLevel1, "SSH_MSG_SERVICE_REQUEST sent: %s", serviceUserAuth)
 	if err := c.transport.writePacket(Marshal(&serviceRequestMsg{serviceUserAuth})); err != nil {
 		return err
 	}
@@ -64,6 +65,7 @@ func (c *connection) clientAuthenticate(config *ClientConfig) error {
 	if err := Unmarshal(packet, &serviceAccept); err != nil {
 		return err
 	}
+	debugf(debugLevel1, "SSH_MSG_SERVICE_ACCEPT received")
 
 	// during the authentication phase the client first attempts the "none" method
 	// then any untried methods suggested by the server.
@@ -72,8 +74,10 @@ func (c *connection) clientAuthenticate(config *ClientConfig) error {
 
 	sessionID := c.transport.getSessionID()
 	for auth := AuthMethod(new(noneAuth)); auth != nil; {
+		debugf(debugLevel1, "trying auth method: %s", auth.method())
 		ok, methods, err := auth.auth(sessionID, config.User, c.transport, config.Rand, extensions)
 		if err != nil {
+			debugf(debugLevel2, "auth method %s error: %v", auth.method(), err)
 			// On disconnect, return error immediately
 			if _, ok := err.(*disconnectMsg); ok {
 				return err
@@ -84,8 +88,10 @@ func (c *connection) clientAuthenticate(config *ClientConfig) error {
 		}
 		if ok == authSuccess {
 			// success
+			debugf(debugLevel1, "authentication succeeded (%s)", auth.method())
 			return nil
 		} else if ok == authFailure {
+			debugf(debugLevel1, "auth method %s failed", auth.method())
 			if m := auth.method(); !slices.Contains(tried, m) {
 				tried = append(tried, m)
 			}
@@ -94,6 +100,7 @@ func (c *connection) clientAuthenticate(config *ClientConfig) error {
 			methods = lastMethods
 		}
 		lastMethods = methods
+		debugf(debugLevel2, "methods that can continue: %v", methods)
 
 		auth = nil
 
@@ -538,9 +545,9 @@ func handleBannerResponse(c packetConn, packet []byte) error {
 // both CLI and GUI environments.
 type KeyboardInteractiveChallenge func(name, instruction string, questions []string, echos []bool) (answers []string, err error)
 
-// GMUserAuth is an AuthMethod that implements GM/T 0129-2023 user authentication
+// GMPublicKeyAuth is an AuthMethod that implements GM/T 0129-2023 user authentication
 // using an SM2 key pair.
-type GMUserAuth struct {
+type GMPublicKeyAuth struct {
 	signer Signer
 }
 
@@ -571,8 +578,9 @@ func buildGM0129SignedData(sessionID []byte, user, service, method string, chall
 	return Marshal(&b)
 }
 
-func (g *GMUserAuth) auth(session []byte, user string, c packetConn, rand io.Reader, extensions map[string][]byte) (authResult, []string, error) {
+func (g *GMPublicKeyAuth) auth(session []byte, user string, c packetConn, rand io.Reader, extensions map[string][]byte) (authResult, []string, error) {
 	// Send SSH_MSG_USERAUTH_REQUEST per GM/T 0129-2023
+	debugf(debugLevel1, "GM/T 0129 pubkey auth: sending SSH_MSG_USERAUTH_REQUEST (method=public_key, user=%s)", user)
 	if err := c.writePacket(Marshal(&userAuthRequestMsg{
 		User:    user,
 		Service: serviceSSH, // "ssh-connection"
@@ -586,9 +594,11 @@ func (g *GMUserAuth) auth(session []byte, user string, c packetConn, rand io.Rea
 		if err != nil {
 			return authFailure, nil, err
 		}
+		debugf(debugLevel3, "GM/T 0129 pubkey auth: received %s", msgTypeStr(packet[0]))
 
 		switch packet[0] {
 		case msgUserAuthSuccess:
+			debugf(debugLevel1, "GM/T 0129 pubkey auth: SSH_MSG_USERAUTH_SUCCESS received")
 			return authSuccess, nil, nil
 
 		case msgUserAuthFailure:
@@ -596,6 +606,7 @@ func (g *GMUserAuth) auth(session []byte, user string, c packetConn, rand io.Rea
 			if err := Unmarshal(packet, &msg); err != nil {
 				return authFailure, nil, err
 			}
+			debugf(debugLevel1, "GM/T 0129 pubkey auth: SSH_MSG_USERAUTH_FAILURE, methods: %v", msg.Methods)
 			if msg.PartialSuccess {
 				return authPartialSuccess, msg.Methods, nil
 			}
@@ -606,20 +617,28 @@ func (g *GMUserAuth) auth(session []byte, user string, c packetConn, rand io.Rea
 			if err := Unmarshal(packet, &challenge); err != nil {
 				return authFailure, nil, err
 			}
+			debugf(debugLevel1, "GM/T 0129 pubkey auth: SSH_MSG_GM_USERAUTH_CHALLENGE(210) received")
+			debugf(debugLevel2, "GM/T 0129 pubkey auth: challenge length = %d bytes", len(challenge.Challenge))
 
 			if g.signer == nil {
 				return authFailure, nil, fmt.Errorf("ssh: GM/T 0129 user auth challenge received, but no SM2 signer configured")
 			}
 
 			pubKeyBlob := g.signer.PublicKey().Marshal()
+			debugf(debugLevel2, "GM/T 0129 pubkey auth: building signed data (session_id|50|user|service|method|challenge|algo|pubkey)")
 
-			// Build signed data per GM/T 0129-2023nd sign it.
+			// Build signed data per GM/T 0129-2023 and sign it.
 			signedData := buildGM0129SignedData(session, user, serviceSSH, "public_key", challenge.Challenge, pubKeyBlob)
+			debugf(debugLevel3, "GM/T 0129 pubkey auth: signed data length = %d bytes", len(signedData))
+
 			sig, err := g.signer.Sign(rand, signedData)
 			if err != nil {
+				debugf(debugLevel1, "GM/T 0129 pubkey auth: SM2 sign failed: %v", err)
 				return authFailure, nil, err
 			}
+			debugf(debugLevel2, "GM/T 0129 pubkey auth: SM2 signature generated (%d bytes)", len(sig.Blob))
 
+			debugf(debugLevel1, "GM/T 0129 pubkey auth: sending SSH_MSG_GM_USERAUTH_RESPOND(211)")
 			if err := c.writePacket(Marshal(&gmUserAuthRespondMsg{
 				UserName:      user,
 				ServiceName:   serviceSSH,
@@ -650,13 +669,13 @@ func (g *GMUserAuth) auth(session []byte, user string, c packetConn, rand io.Rea
 	}
 }
 
-func (g *GMUserAuth) method() string {
+func (g *GMPublicKeyAuth) method() string {
 	return "public_key"
 }
 
-// GMUserAuthSigner returns an AuthMethod that uses an SM2 signer for GM/T 0129-2023
-func GMUserAuthSigner(signer Signer) AuthMethod {
-	return &GMUserAuth{
+// GMPublicKeys returns an AuthMethod that uses an SM2 signer for GM/T 0129-2023
+func GMPublicKeys(signer Signer) AuthMethod {
+	return &GMPublicKeyAuth{
 		signer: signer,
 	}
 }
@@ -672,6 +691,7 @@ func (g *GMPasswordAuth) method() string {
 }
 
 func (g *GMPasswordAuth) auth(session []byte, user string, c packetConn, rand io.Reader, extensions map[string][]byte) (authResult, []string, error) {
+	debugf(debugLevel1, "GM/T 0129 password auth: sending SSH_MSG_USERAUTH_REQUEST (method=password, user=%s)", user)
 	if err := c.writePacket(Marshal(&userAuthRequestMsg{
 		User:    user,
 		Service: serviceSSH,
@@ -685,9 +705,11 @@ func (g *GMPasswordAuth) auth(session []byte, user string, c packetConn, rand io
 		if err != nil {
 			return authFailure, nil, err
 		}
+		debugf(debugLevel3, "GM/T 0129 password auth: received %s", msgTypeStr(packet[0]))
 
 		switch packet[0] {
 		case msgUserAuthSuccess:
+			debugf(debugLevel1, "GM/T 0129 password auth: SSH_MSG_USERAUTH_SUCCESS received")
 			return authSuccess, nil, nil
 
 		case msgUserAuthFailure:
@@ -695,6 +717,7 @@ func (g *GMPasswordAuth) auth(session []byte, user string, c packetConn, rand io
 			if err := Unmarshal(packet, &msg); err != nil {
 				return authFailure, nil, err
 			}
+			debugf(debugLevel1, "GM/T 0129 password auth: SSH_MSG_USERAUTH_FAILURE, methods: %v", msg.Methods)
 			if msg.PartialSuccess {
 				return authPartialSuccess, msg.Methods, nil
 			}
@@ -705,6 +728,8 @@ func (g *GMPasswordAuth) auth(session []byte, user string, c packetConn, rand io
 			if err := Unmarshal(packet, &challenge); err != nil {
 				return authFailure, nil, err
 			}
+			debugf(debugLevel1, "GM/T 0129 password auth: SSH_MSG_GM_USERAUTH_CHALLENGE(210) received")
+			debugf(debugLevel2, "GM/T 0129 password auth: challenge = %d bytes, salt = %d bytes", len(challenge.Challenge), len(challenge.Salt))
 
 			// response = SM3(challenge ‖ SM3(password) ‖ salt)
 			passwdHash := sm3.Sum([]byte(g.password))
@@ -713,12 +738,15 @@ func (g *GMPasswordAuth) auth(session []byte, user string, c packetConn, rand io
 			h.Write(passwdHash[:])
 			h.Write(challenge.Salt)
 			response := h.Sum(nil)
+			debugf(debugLevel2, "GM/T 0129 password auth: computed response = SM3(challenge || SM3(password) || salt)")
 
+			debugf(debugLevel1, "GM/T 0129 password auth: sending SSH_MSG_GM_USERAUTH_RESPOND(211)")
 			if err := c.writePacket(Marshal(&gmUserAuthPasswordRespondMsg{
 				UserName:      user,
 				ServiceName:   serviceSSH,
 				Method:        "password",
 				Response:      response,
+				Password:      g.password,
 				AlgorithmName: "sm3",
 			})); err != nil {
 				return authFailure, nil, err

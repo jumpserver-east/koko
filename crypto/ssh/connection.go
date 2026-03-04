@@ -5,8 +5,10 @@
 package ssh
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net"
+	"sync"
 )
 
 // OpenChannelError is returned if the other side rejects an
@@ -98,6 +100,54 @@ type connection struct {
 
 	// The connection protocol.
 	*mux
+
+	// GM/T 0129 password auth context, set during challenge-response.
+	gmChallenge []byte
+	gmSalt      []byte
+}
+
+// gmAuthDataStore stores GM/T 0129 challenge/salt keyed by hex session ID,
+// so that higher-level wrappers (e.g. gliderlabs/ssh) that only expose a
+// string session ID can retrieve them via GetGMAuthDataBySessionID.
+var gmAuthDataStore sync.Map
+
+type gmAuthData struct {
+	challenge, salt []byte
+}
+
+func storeGMAuthData(sessionID, challenge, salt []byte) {
+	gmAuthDataStore.Store(hex.EncodeToString(sessionID), &gmAuthData{challenge, salt})
+}
+
+func clearGMAuthData(sessionID []byte) {
+	gmAuthDataStore.Delete(hex.EncodeToString(sessionID))
+}
+
+// GetGMAuthData returns the GM/T 0129-2023 challenge and salt for the current
+// password authentication attempt. PasswordCallback implementations can use this
+// to detect GM password auth and verify the response:
+//
+//	response == SM3(challenge || SM3(storedPassword) || salt)
+//
+// Returns ok=false if the current auth is not a GM password challenge-response.
+func GetGMAuthData(conn ConnMetadata) (challenge, salt []byte, ok bool) {
+	if c, is := conn.(*connection); is && c.gmChallenge != nil {
+		return c.gmChallenge, c.gmSalt, true
+	}
+	return nil, nil, false
+}
+
+// GetGMAuthDataBySessionID returns the GM/T 0129-2023 challenge and salt
+// using a hex-encoded session ID. This is intended for use with higher-level
+// SSH server wrappers (e.g. gliderlabs/ssh) where ConnMetadata is not directly
+// available but a string session ID is.
+func GetGMAuthDataBySessionID(sessionID string) (challenge, salt []byte, ok bool) {
+	v, loaded := gmAuthDataStore.Load(sessionID)
+	if !loaded {
+		return nil, nil, false
+	}
+	d := v.(*gmAuthData)
+	return d.challenge, d.salt, true
 }
 
 func (c *connection) Close() error {

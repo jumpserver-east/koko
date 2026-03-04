@@ -564,6 +564,17 @@ func (t *handshakeTransport) sendKexInit() error {
 	packetCopy := make([]byte, len(packet))
 	copy(packetCopy, packet)
 
+	debugf(debugLevel1, "SSH_MSG_KEXINIT sent")
+	debugf(debugLevel2, "local %s KEXINIT proposal", t.id())
+	debugf(debugLevel2, "  KEX algorithms: %s", strings.Join(msg.KexAlgos, ","))
+	debugf(debugLevel2, "  host key algorithms: %s", strings.Join(msg.ServerHostKeyAlgos, ","))
+	debugf(debugLevel2, "  ciphers ctos: %s", strings.Join(msg.CiphersClientServer, ","))
+	debugf(debugLevel2, "  ciphers stoc: %s", strings.Join(msg.CiphersServerClient, ","))
+	debugf(debugLevel2, "  MACs ctos: %s", strings.Join(msg.MACsClientServer, ","))
+	debugf(debugLevel2, "  MACs stoc: %s", strings.Join(msg.MACsServerClient, ","))
+	debugf(debugLevel2, "  compression ctos: %s", strings.Join(msg.CompressionClientServer, ","))
+	debugf(debugLevel2, "  compression stoc: %s", strings.Join(msg.CompressionServerClient, ","))
+
 	if err := t.pushPacket(packetCopy); err != nil {
 		return err
 	}
@@ -657,6 +668,20 @@ func (t *handshakeTransport) enterKeyExchange(otherInitPacket []byte) error {
 		return err
 	}
 
+	debugf(debugLevel1, "SSH_MSG_KEXINIT received")
+	debugf(debugLevel2, "remote %s KEXINIT proposal", func() string {
+		if len(t.hostKeys) == 0 {
+			return "server"
+		}
+		return "client"
+	}())
+	debugf(debugLevel2, "  KEX algorithms: %s", strings.Join(otherInit.KexAlgos, ","))
+	debugf(debugLevel2, "  host key algorithms: %s", strings.Join(otherInit.ServerHostKeyAlgos, ","))
+	debugf(debugLevel2, "  ciphers ctos: %s", strings.Join(otherInit.CiphersClientServer, ","))
+	debugf(debugLevel2, "  ciphers stoc: %s", strings.Join(otherInit.CiphersServerClient, ","))
+	debugf(debugLevel2, "  MACs ctos: %s", strings.Join(otherInit.MACsClientServer, ","))
+	debugf(debugLevel2, "  MACs stoc: %s", strings.Join(otherInit.MACsServerClient, ","))
+
 	magics := handshakeMagics{
 		clientVersion: t.clientVersion,
 		serverVersion: t.serverVersion,
@@ -679,6 +704,11 @@ func (t *handshakeTransport) enterKeyExchange(otherInitPacket []byte) error {
 	if err != nil {
 		return err
 	}
+
+	debugf(debugLevel1, "kex: algorithm: %s", t.algorithms.KeyExchange)
+	debugf(debugLevel1, "kex: host key algorithm: %s", t.algorithms.HostKey)
+	debugf(debugLevel1, "kex: client->server cipher: %s MAC: %s", t.algorithms.Write.Cipher, t.algorithms.Write.MAC)
+	debugf(debugLevel1, "kex: server->client cipher: %s MAC: %s", t.algorithms.Read.Cipher, t.algorithms.Read.MAC)
 
 	if t.sessionID == nil && ((isClient && slices.Contains(serverInit.KexAlgos, kexStrictServer)) || (!isClient && slices.Contains(clientInit.KexAlgos, kexStrictClient))) {
 		t.strictMode = true
@@ -730,6 +760,7 @@ func (t *handshakeTransport) enterKeyExchange(otherInitPacket []byte) error {
 	if err := t.conn.prepareKeyChange(t.algorithms, result); err != nil {
 		return err
 	}
+	debugf(debugLevel1, "SSH_MSG_NEWKEYS sent")
 	if err = t.conn.writePacket([]byte{msgNewKeys}); err != nil {
 		return err
 	}
@@ -761,6 +792,7 @@ func (t *handshakeTransport) enterKeyExchange(otherInitPacket []byte) error {
 	} else if packet[0] != msgNewKeys {
 		return unexpectedMessageError(msgNewKeys, packet[0])
 	}
+	debugf(debugLevel1, "SSH_MSG_NEWKEYS received")
 
 	if firstKeyExchange {
 		// Indicates to the transport that the first key exchange is completed

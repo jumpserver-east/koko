@@ -116,8 +116,13 @@ type ServerConfig struct {
 	// to 6.
 	MaxAuthTries int
 
-	// PasswordCallback, if non-nil, is called when a user
-	// attempts to authenticate using a password.
+	// PasswordCallback, if non-nil, is called when a user attempts to authenticate
+	// using a password. For standard RFC 4252 password authentication, password
+	// contains the plaintext password. For GM/T 0129-2023 challenge-response
+	// authentication (triggered when the client sends an empty-payload password
+	// request), password contains the response bytes SM3(challenge‖SM3(pwd)‖salt),
+	// and conn can be type-asserted to [GMChallengeGetter] to retrieve the
+	// challenge and salt used for verification.
 	PasswordCallback func(conn ConnMetadata, password []byte) (*Permissions, error)
 
 	// PublicKeyCallback, if non-nil, is called when a client
@@ -611,21 +616,61 @@ userAuthLoop:
 				}
 			}
 		case "password":
-			if authConfig.PasswordCallback == nil {
-				authErr = errors.New("ssh: password auth not configured")
-				break
-			}
 			payload := userAuthReq.Payload
-			if len(payload) < 1 || payload[0] != 0 {
-				return nil, parseError(msgUserAuthRequest)
+			if len(payload) == 0 {
+				// GM/T 0129-2023 password authentication: empty payload triggers challenge-response.
+				if authConfig.PasswordCallback == nil {
+					authErr = errors.New("ssh: password auth not configured")
+					break
+				}
+				challenge := make([]byte, 32)
+				salt := make([]byte, 16)
+				if _, err := io.ReadFull(config.Rand, challenge); err != nil {
+					return nil, err
+				}
+				if _, err := io.ReadFull(config.Rand, salt); err != nil {
+					return nil, err
+				}
+				if err := s.transport.writePacket(Marshal(&gmUserAuthChallengeMsg{
+					Challenge: challenge,
+					Salt:      salt,
+				})); err != nil {
+					return nil, err
+				}
+				packet, err := s.transport.readPacket()
+				if err != nil {
+					return nil, err
+				}
+				var respond gmUserAuthPasswordRespondMsg
+				if err := Unmarshal(packet, &respond); err != nil {
+					return nil, err
+				}
+				// Store challenge/salt so PasswordCallback can access them:
+				// - GetGMAuthData(conn) for direct gossh usage
+				// - GetGMAuthDataBySessionID(hexID) for gliderlabs/ssh wrappers
+				s.gmChallenge = challenge
+				s.gmSalt = salt
+				storeGMAuthData(sessionID, challenge, salt)
+				perms, authErr = authConfig.PasswordCallback(s, []byte(respond.Password))
+				clearGMAuthData(sessionID)
+				s.gmChallenge = nil
+				s.gmSalt = nil
+			} else {
+				// Standard RFC 4252 password authentication
+				if authConfig.PasswordCallback == nil {
+					authErr = errors.New("ssh: password auth not configured")
+					break
+				}
+				if payload[0] != 0 {
+					return nil, parseError(msgUserAuthRequest)
+				}
+				payload = payload[1:]
+				password, payload, ok := parseString(payload)
+				if !ok || len(payload) > 0 {
+					return nil, parseError(msgUserAuthRequest)
+				}
+				perms, authErr = authConfig.PasswordCallback(s, password)
 			}
-			payload = payload[1:]
-			password, payload, ok := parseString(payload)
-			if !ok || len(payload) > 0 {
-				return nil, parseError(msgUserAuthRequest)
-			}
-
-			perms, authErr = authConfig.PasswordCallback(s, password)
 		case "keyboard-interactive":
 			if authConfig.KeyboardInteractiveCallback == nil {
 				authErr = errors.New("ssh: keyboard-interactive auth not configured")
