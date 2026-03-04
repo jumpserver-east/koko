@@ -9,25 +9,33 @@
 // 用法:
 //
 //	go build -o gmssh ./cmd/gmssh/
+//	./gmssh -keygen                            # 生成 SM2 密钥对（默认保存到 ~/.ssh/id_sm2）
+//	./gmssh -keygen -f /path/to/key            # 指定密钥输出路径
+//	./gmssh -keygen -C "user@host"             # 添加注释
+//	./gmssh -keygen -passphrase "secret"       # 使用口令加密私钥
 //	./gmssh -host 127.0.0.1 -port 2222 -user admin -password <pwd>
-//	./gmssh -host 127.0.0.1 -port 2222 -user admin -key ~/.ssh/sm2_key
+//	./gmssh -host 127.0.0.1 -port 2222 -user admin -key ~/.ssh/id_sm2
 //	./gmssh -v    # debug1 — 类似 ssh -v
 //	./gmssh -vv   # debug2 — 类似 ssh -vv
 //	./gmssh -vvv  # debug3 — 类似 ssh -vvv
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/emmansun/gmsm/sm2"
 	ssh "golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 )
@@ -61,9 +69,8 @@ func logErr(msg string) {
 	fmt.Printf("  %s✗%s %s\n", colorRed, colorReset, msg)
 }
 
-// sshDebugLogger is the callback for ssh.SetDebugLogger.
 // It prints debug messages with level prefix, like OpenSSH's ssh -vvv.
-func sshDebugLogger(level int, format string, args ...interface{}) {
+func sshDebugLogger(level int, format string, args ...any) {
 	if level > verbosity {
 		return
 	}
@@ -73,11 +80,16 @@ func sshDebugLogger(level int, format string, args ...interface{}) {
 
 func main() {
 	// --- CLI flags ---
+	doKeygen := flag.Bool("keygen", false, "Generate a new SM2 key pair (GM/T 0129-2023)")
+	keygenFile := flag.String("f", "", "Output file for generated key pair (default: ~/.ssh/id_sm2)")
+	keygenComment := flag.String("C", "", "Comment to embed in the generated public key")
+	keygenPassphrase := flag.String("passphrase", "", "Passphrase to encrypt the private key (empty = no encryption)")
+
 	host := flag.String("host", "127.0.0.1", "SSH server host")
 	port := flag.String("port", "2222", "SSH server port")
 	user := flag.String("user", "admin", "SSH username")
 	password := flag.String("password", "", "Password for GM/T 0129 password auth")
-	keyFile := flag.String("key", "", "Path to SM2 private key file (OpenSSH PEM format) for GM/T 0129 public key auth")
+	keyFile := flag.String("key", "", "Path to SM2 private key file (default: ~/.ssh/id_sm2)")
 	kexAlgo := flag.String("kex", "sm2-sm3", "Key exchange algorithm")
 	cipherAlgo := flag.String("cipher", "sm4-ctr", "Cipher algorithm (sm4-ctr, sm4-gcm, sm4-cbc)")
 	macAlgo := flag.String("mac", "hmac-sm3", "MAC algorithm (hmac-sm3, cbc-mac)")
@@ -105,15 +117,34 @@ func main() {
 		ssh.SetDebugLogger(sshDebugLogger)
 	}
 
+	// --- keygen mode ---
+	if *doKeygen {
+		if err := runKeygen(*keygenFile, *keygenComment, *keygenPassphrase); err != nil {
+			logErr(err.Error())
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Default key path: ~/.ssh/id_sm2
+	if *keyFile == "" && *password == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			defaultKey := filepath.Join(home, ".ssh", "id_sm2")
+			if _, err := os.Stat(defaultKey); err == nil {
+				*keyFile = defaultKey
+			}
+		}
+	}
+
 	if *password == "" && *keyFile == "" {
-		fmt.Fprintln(os.Stderr, "Error: must specify -password or -key")
+		fmt.Fprintln(os.Stderr, "Error: must specify -password or -key (or use -keygen to generate a key pair)")
 		flag.Usage()
 		os.Exit(1)
 	}
 
 	addr := net.JoinHostPort(*host, *port)
 
-	fmt.Printf("\n%s╔════════════════════════════════╗%s\n", colorCyan, colorReset)
+	fmt.Printf("\n%s╔══════════════════════════════════╗%s\n", colorCyan, colorReset)
 	fmt.Printf("%s║       GM SSH Client Tool         ║%s\n", colorCyan, colorReset)
 	fmt.Printf("%s╚══════════════════════════════════╝%s\n\n", colorCyan, colorReset)
 
@@ -230,6 +261,89 @@ func main() {
 	}
 }
 
+// runKeygen generates an SM2 key pair and writes them to disk in OpenSSH format.
+// privPath: private key file path; public key is written to privPath+".pub".
+// comment is embedded in the public key line (like ssh-keygen -C).
+// passphrase encrypts the private key when non-empty.
+func runKeygen(privPath, comment, passphrase string) error {
+	fmt.Printf("\n%s╔══════════════════════════════════╗%s\n", colorCyan, colorReset)
+	fmt.Printf("%s║    GM SSH Key Generator (SM2)    ║%s\n", colorCyan, colorReset)
+	fmt.Printf("%s╚══════════════════════════════════╝%s\n\n", colorCyan, colorReset)
+
+	// Default output path
+	if privPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("cannot determine home directory: %w", err)
+		}
+		privPath = filepath.Join(home, ".ssh", "id_sm2")
+	}
+	pubPath := privPath + ".pub"
+
+	// Refuse to overwrite existing files
+	for _, p := range []string{privPath, pubPath} {
+		if _, err := os.Stat(p); err == nil {
+			return fmt.Errorf("file already exists: %s (remove it first or use -f to specify a different path)", p)
+		}
+	}
+
+	// Ensure parent directory exists with safe permissions
+	if err := os.MkdirAll(filepath.Dir(privPath), 0700); err != nil {
+		return fmt.Errorf("cannot create directory: %w", err)
+	}
+
+	logStep(1, "Generating SM2 key pair (GM/T 0129-2023)")
+	privKey, err := sm2.GenerateKey(rand.Reader)
+	if err != nil {
+		return fmt.Errorf("SM2 key generation failed: %w", err)
+	}
+	logOK("SM2 key pair generated")
+
+	// Marshal private key in OpenSSH format
+	logStep(2, "Encoding private key (OpenSSH PEM)")
+	var privPEMBlock *pem.Block
+	if passphrase != "" {
+		privPEMBlock, err = ssh.MarshalPrivateKeyWithPassphrase(privKey, comment, []byte(passphrase))
+		logInfo("Private key will be encrypted with passphrase")
+	} else {
+		privPEMBlock, err = ssh.MarshalPrivateKey(privKey, comment)
+		logInfo("Private key will NOT be encrypted (no passphrase)")
+	}
+	if err != nil {
+		return fmt.Errorf("failed to marshal private key: %w", err)
+	}
+
+	if err := os.WriteFile(privPath, pem.EncodeToMemory(privPEMBlock), 0600); err != nil {
+		return fmt.Errorf("failed to write private key: %w", err)
+	}
+	logOK(fmt.Sprintf("Private key saved: %s", privPath))
+
+	// Marshal public key in OpenSSH authorized_keys format
+	logStep(3, "Encoding public key (OpenSSH authorized_keys)")
+	pubKey, err := ssh.NewPublicKey(&privKey.PublicKey)
+	if err != nil {
+		return fmt.Errorf("failed to create SSH public key: %w", err)
+	}
+	pubLine := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pubKey)))
+	if comment != "" {
+		pubLine += " " + comment
+	}
+	if err := os.WriteFile(pubPath, []byte(pubLine+"\n"), 0644); err != nil {
+		return fmt.Errorf("failed to write public key: %w", err)
+	}
+	logOK(fmt.Sprintf("Public key saved:  %s", pubPath))
+
+	fmt.Println()
+	logInfo("Key type:    SM2 (GM/T 0129-2023)")
+	logInfo(fmt.Sprintf("Fingerprint: %s", fingerprint(pubKey)))
+	if comment != "" {
+		logInfo(fmt.Sprintf("Comment:     %s", comment))
+	}
+	fmt.Printf("\n  Append public key to server's authorized_keys:\n")
+	fmt.Printf("  cat %s >> ~/.ssh/authorized_keys\n\n", pubPath)
+	return nil
+}
+
 // runShell starts an interactive shell session.
 func runShell(client *ssh.Client) error {
 	session, err := client.NewSession()
@@ -264,8 +378,6 @@ func runShell(client *ssh.Client) error {
 	if err := session.Shell(); err != nil {
 		return fmt.Errorf("start shell: %w", err)
 	}
-
-	logOK("Interactive shell started (type 'exit' to quit)")
 	return session.Wait()
 }
 
