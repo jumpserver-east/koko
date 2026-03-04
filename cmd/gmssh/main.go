@@ -82,8 +82,6 @@ func main() {
 	cipherAlgo := flag.String("cipher", "sm4-ctr", "Cipher algorithm (sm4-ctr, sm4-gcm, sm4-cbc)")
 	macAlgo := flag.String("mac", "hmac-sm3", "MAC algorithm (hmac-sm3, cbc-mac)")
 	hostKeyAlgo := flag.String("hostkey", "sm2", "Host key algorithm")
-	shellMode := flag.Bool("shell", false, "Start interactive shell after auth")
-	cmd := flag.String("cmd", "", "Command to execute after auth (default: whoami)")
 	timeout := flag.Duration("timeout", 30*time.Second, "Connection timeout")
 
 	// Verbose flags: -v, -vv, -vvv (like ssh)
@@ -115,9 +113,9 @@ func main() {
 
 	addr := net.JoinHostPort(*host, *port)
 
-	fmt.Printf("\n%s╔══════════════════════════════════════════════════╗%s\n", colorCyan, colorReset)
-	fmt.Printf("%s║    GM/T 0129-2023 SSH Client Test Tool            ║%s\n", colorCyan, colorReset)
-	fmt.Printf("%s╚══════════════════════════════════════════════════╝%s\n\n", colorCyan, colorReset)
+	fmt.Printf("\n%s╔════════════════════════════════╗%s\n", colorCyan, colorReset)
+	fmt.Printf("%s║       GM SSH Client Tool         ║%s\n", colorCyan, colorReset)
+	fmt.Printf("%s╚══════════════════════════════════╝%s\n\n", colorCyan, colorReset)
 
 	if verbosity > 0 {
 		logInfo(fmt.Sprintf("Debug verbosity: level %d (-"+strings.Repeat("v", verbosity)+")", verbosity))
@@ -223,48 +221,13 @@ func main() {
 	client := ssh.NewClient(sshConn, chans, reqs)
 	defer client.Close()
 
-	// --- Step 5: Verify data channel ---
+	// --- Step 5: Interactive shell ---
 	step++
-	if *shellMode {
-		logStep(step, "Opening interactive shell session")
-		if err := runShell(client); err != nil {
-			logErr(fmt.Sprintf("Shell session error: %v", err))
-			os.Exit(1)
-		}
-	} else {
-		execCmd := "?"
-		if *cmd != "" {
-			execCmd = *cmd
-		}
-		logStep(step, fmt.Sprintf("Executing command: %s", execCmd))
-		if err := runCommand(client, execCmd); err != nil {
-			logErr(fmt.Sprintf("Command execution failed: %v", err))
-			os.Exit(1)
-		}
+	logStep(step, "Opening interactive shell session")
+	if err := runShell(client); err != nil {
+		logErr(fmt.Sprintf("Shell session error: %v", err))
+		os.Exit(1)
 	}
-
-	// --- Summary ---
-	fmt.Printf("\n%s╔══════════════════════════════════════════════════╗%s\n", colorGreen, colorReset)
-	fmt.Printf("%s║    All GM/T 0129 tests PASSED                    ║%s\n", colorGreen, colorReset)
-	fmt.Printf("%s╚══════════════════════════════════════════════════╝%s\n", colorGreen, colorReset)
-	fmt.Printf("  Total time: %v\n\n", time.Since(startTime).Round(time.Millisecond))
-}
-
-// runCommand executes a single command over the SSH session.
-func runCommand(client *ssh.Client, cmd string) error {
-	session, err := client.NewSession()
-	if err != nil {
-		return fmt.Errorf("new session: %w", err)
-	}
-	defer session.Close()
-
-	output, err := session.CombinedOutput(cmd)
-	if err != nil {
-		return fmt.Errorf("run command: %w", err)
-	}
-
-	logOK(fmt.Sprintf("Output:\n%s", strings.TrimSpace(string(output))))
-	return nil
 }
 
 // runShell starts an interactive shell session.

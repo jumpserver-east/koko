@@ -685,115 +685,150 @@ userAuthLoop:
 				break
 			}
 			payload := userAuthReq.Payload
-			if len(payload) < 1 {
-				return nil, parseError(msgUserAuthRequest)
-			}
-			isQuery := payload[0] == 0
-			payload = payload[1:]
-			algoBytes, payload, ok := parseString(payload)
-			if !ok {
-				return nil, parseError(msgUserAuthRequest)
-			}
-			algo := string(algoBytes)
-			if !slices.Contains(config.PublicKeyAuthAlgorithms, underlyingAlgo(algo)) {
-				authErr = fmt.Errorf("ssh: algorithm %q not accepted", algo)
-				break
-			}
-
-			pubKeyData, payload, ok := parseString(payload)
-			if !ok {
-				return nil, parseError(msgUserAuthRequest)
-			}
-
-			pubKey, err := ParsePublicKey(pubKeyData)
-			if err != nil {
-				return nil, err
-			}
-
-			candidate, ok := cache.get(s.user, pubKeyData)
-			if !ok {
-				candidate.user = s.user
-				candidate.pubKeyData = pubKeyData
-				candidate.perms, candidate.result = authConfig.PublicKeyCallback(s, pubKey)
-				_, isPartialSuccessError := candidate.result.(*PartialSuccessError)
-				if isPartialSuccessError && config.VerifiedPublicKeyCallback != nil {
-					return nil, errors.New("ssh: invalid library usage: PublicKeyCallback must not return partial success when VerifiedPublicKeyCallback is defined")
+			if len(payload) == 0 {
+				// GM/T 0129-2023 public key authentication: empty payload triggers challenge-response.
+				challenge := make([]byte, 32)
+				if _, err := io.ReadFull(config.Rand, challenge); err != nil {
+					return nil, err
+				}
+				if err := s.transport.writePacket(Marshal(&gmUserAuthChallengeMsg{
+					Challenge: challenge,
+				})); err != nil {
+					return nil, err
+				}
+				packet, err := s.transport.readPacket()
+				if err != nil {
+					return nil, err
+				}
+				var respond gmUserAuthRespondMsg
+				if err := Unmarshal(packet, &respond); err != nil {
+					return nil, err
 				}
 
-				if (candidate.result == nil || isPartialSuccessError) &&
-					candidate.perms != nil &&
-					candidate.perms.CriticalOptions != nil &&
-					candidate.perms.CriticalOptions[sourceAddressCriticalOption] != "" {
-					if err := checkSourceAddress(
-						s.RemoteAddr(),
-						candidate.perms.CriticalOptions[sourceAddressCriticalOption]); err != nil {
-						candidate.result = err
-					}
-				}
-				cache.add(candidate)
-			}
-
-			if isQuery {
-				// The client can query if the given public key
-				// would be okay.
-
-				if len(payload) > 0 {
-					return nil, parseError(msgUserAuthRequest)
-				}
-				_, isPartialSuccessError := candidate.result.(*PartialSuccessError)
-				if candidate.result == nil || isPartialSuccessError {
-					okMsg := userAuthPubKeyOkMsg{
-						Algo:   algo,
-						PubKey: pubKeyData,
-					}
-					if err = s.transport.writePacket(Marshal(&okMsg)); err != nil {
-						return nil, err
-					}
-					continue userAuthLoop
-				}
-				authErr = candidate.result
-			} else {
-				sig, payload, ok := parseSignature(payload)
-				if !ok || len(payload) > 0 {
-					return nil, parseError(msgUserAuthRequest)
-				}
-				// Ensure the declared public key algo is compatible with the
-				// decoded one. This check will ensure we don't accept e.g.
-				// ssh-rsa-cert-v01@openssh.com algorithm with ssh-rsa public
-				// key type. The algorithm and public key type must be
-				// consistent: both must be certificate algorithms, or neither.
-				if !slices.Contains(algorithmsForKeyFormat(pubKey.Type()), algo) {
-					authErr = fmt.Errorf("ssh: public key type %q not compatible with selected algorithm %q",
-						pubKey.Type(), algo)
-					break
-				}
-				// Ensure the public key algo and signature algo
-				// are supported.  Compare the private key
-				// algorithm name that corresponds to algo with
-				// sig.Format.  This is usually the same, but
-				// for certs, the names differ.
-				if !slices.Contains(config.PublicKeyAuthAlgorithms, sig.Format) {
-					authErr = fmt.Errorf("ssh: algorithm %q not accepted", sig.Format)
-					break
-				}
-				if !isAlgoCompatible(algo, sig.Format) {
-					authErr = fmt.Errorf("ssh: signature %q not compatible with selected algorithm %q", sig.Format, algo)
-					break
+				pubKey, err := ParsePublicKey(respond.PublicKeyBlob)
+				if err != nil {
+					return nil, err
 				}
 
-				signedData := buildDataSignedForAuth(sessionID, userAuthReq, algo, pubKeyData)
-
+				// Verify the SM2 signature over GM/T 0129 signed data.
+				signedData := buildGM0129SignedData(sessionID, userAuthReq.User, userAuthReq.Service,
+					"public_key", challenge, respond.PublicKeyBlob)
+				sig := &Signature{Format: respond.AlgorithmName, Blob: respond.Response}
 				if err := pubKey.Verify(signedData, sig); err != nil {
 					return nil, err
 				}
 
-				authErr = candidate.result
-				perms = candidate.perms
-				if authErr == nil && config.VerifiedPublicKeyCallback != nil {
-					// Only call VerifiedPublicKeyCallback after the key has been accepted
-					// and successfully verified. If authErr is non-nil, the key is not
-					// considered verified and the callback must not run.
-					perms, authErr = config.VerifiedPublicKeyCallback(s, pubKey, perms, algo)
+				// Signature valid — ask PublicKeyCallback whether this key is accepted.
+				perms, authErr = authConfig.PublicKeyCallback(s, pubKey)
+			} else {
+				// Standard RFC 4252 public key authentication.
+				if len(payload) < 1 {
+					return nil, parseError(msgUserAuthRequest)
+				}
+				isQuery := payload[0] == 0
+				payload = payload[1:]
+				algoBytes, payload, ok := parseString(payload)
+				if !ok {
+					return nil, parseError(msgUserAuthRequest)
+				}
+				algo := string(algoBytes)
+				if !slices.Contains(config.PublicKeyAuthAlgorithms, underlyingAlgo(algo)) {
+					authErr = fmt.Errorf("ssh: algorithm %q not accepted", algo)
+					break
+				}
+
+				pubKeyData, payload, ok := parseString(payload)
+				if !ok {
+					return nil, parseError(msgUserAuthRequest)
+				}
+
+				pubKey, err := ParsePublicKey(pubKeyData)
+				if err != nil {
+					return nil, err
+				}
+
+				candidate, ok := cache.get(s.user, pubKeyData)
+				if !ok {
+					candidate.user = s.user
+					candidate.pubKeyData = pubKeyData
+					candidate.perms, candidate.result = authConfig.PublicKeyCallback(s, pubKey)
+					_, isPartialSuccessError := candidate.result.(*PartialSuccessError)
+					if isPartialSuccessError && config.VerifiedPublicKeyCallback != nil {
+						return nil, errors.New("ssh: invalid library usage: PublicKeyCallback must not return partial success when VerifiedPublicKeyCallback is defined")
+					}
+
+					if (candidate.result == nil || isPartialSuccessError) &&
+						candidate.perms != nil &&
+						candidate.perms.CriticalOptions != nil &&
+						candidate.perms.CriticalOptions[sourceAddressCriticalOption] != "" {
+						if err := checkSourceAddress(
+							s.RemoteAddr(),
+							candidate.perms.CriticalOptions[sourceAddressCriticalOption]); err != nil {
+							candidate.result = err
+						}
+					}
+					cache.add(candidate)
+				}
+
+				if isQuery {
+					// The client can query if the given public key
+					// would be okay.
+
+					if len(payload) > 0 {
+						return nil, parseError(msgUserAuthRequest)
+					}
+					_, isPartialSuccessError := candidate.result.(*PartialSuccessError)
+					if candidate.result == nil || isPartialSuccessError {
+						okMsg := userAuthPubKeyOkMsg{
+							Algo:   algo,
+							PubKey: pubKeyData,
+						}
+						if err = s.transport.writePacket(Marshal(&okMsg)); err != nil {
+							return nil, err
+						}
+						continue userAuthLoop
+					}
+					authErr = candidate.result
+				} else {
+					sig, payload, ok := parseSignature(payload)
+					if !ok || len(payload) > 0 {
+						return nil, parseError(msgUserAuthRequest)
+					}
+					// Ensure the declared public key algo is compatible with the
+					// decoded one. This check will ensure we don't accept e.g.
+					// ssh-rsa-cert-v01@openssh.com algorithm with ssh-rsa public
+					// key type. The algorithm and public key type must be
+					// consistent: both must be certificate algorithms, or neither.
+					if !slices.Contains(algorithmsForKeyFormat(pubKey.Type()), algo) {
+						authErr = fmt.Errorf("ssh: public key type %q not compatible with selected algorithm %q",
+							pubKey.Type(), algo)
+						break
+					}
+					// Ensure the public key algo and signature algo
+					// are supported.  Compare the private key
+					// algorithm name that corresponds to algo with
+					// sig.Format.  This is usually the same, but
+					// for certs, the names differ.
+					if !slices.Contains(config.PublicKeyAuthAlgorithms, sig.Format) {
+						authErr = fmt.Errorf("ssh: algorithm %q not accepted", sig.Format)
+						break
+					}
+					if !isAlgoCompatible(algo, sig.Format) {
+						authErr = fmt.Errorf("ssh: signature %q not compatible with selected algorithm %q", sig.Format, algo)
+						break
+					}
+
+					signedData := buildDataSignedForAuth(sessionID, userAuthReq, algo, pubKeyData)
+
+					if err := pubKey.Verify(signedData, sig); err != nil {
+						return nil, err
+					}
+
+					authErr = candidate.result
+					perms = candidate.perms
+					if authErr == nil && config.VerifiedPublicKeyCallback != nil {
+						perms, authErr = config.VerifiedPublicKeyCallback(s, pubKey, perms, algo)
+					}
 				}
 			}
 		case "gssapi-with-mic":

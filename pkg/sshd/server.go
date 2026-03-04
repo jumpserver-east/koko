@@ -88,7 +88,7 @@ func NewSSHServer(jmsService *service.JMService) *Server {
 		Addr:             addr,
 		PasswordHandler:  sshHandler.PasswordAuth,
 		PublicKeyHandler: sshHandler.PublicKeyAuth,
-		Version:          "JumpServer",
+		Version:          "CSSH-1.0-JumpServer",
 		HostSigners:      hostSigners,
 		MaxSessions:      int32(cf.SshMaxSessions),
 		ServerConfigCallback: func(ctx ssh.Context) *gossh.ServerConfig {

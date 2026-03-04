@@ -584,7 +584,7 @@ func (g *GMPublicKeyAuth) auth(session []byte, user string, c packetConn, rand i
 	if err := c.writePacket(Marshal(&userAuthRequestMsg{
 		User:    user,
 		Service: serviceSSH, // "ssh-connection"
-		Method:  "public_key",
+		Method:  "publickey",
 	})); err != nil {
 		return authFailure, nil, err
 	}
@@ -670,7 +670,7 @@ func (g *GMPublicKeyAuth) auth(session []byte, user string, c packetConn, rand i
 }
 
 func (g *GMPublicKeyAuth) method() string {
-	return "public_key"
+	return "publickey"
 }
 
 // GMPublicKeys returns an AuthMethod that uses an SM2 signer for GM/T 0129-2023
