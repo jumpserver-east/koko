@@ -27,22 +27,23 @@ const (
 )
 
 var (
-	supportedMACs = []string{"hmac-sha2-256-etm@openssh.com",
-		"hmac-sha2-256", "hmac-sha1",
+	supportedMACs = []string{
 		"hmac-sm3", "cbc-mac",
+		"hmac-sha2-256-etm@openssh.com",
+		"hmac-sha2-256", "hmac-sha1",
 	}
 
 	supportedKexAlgos = []string{
+		"sm2-sm3", "ecdh-sm2p256v1-sm3",
 		"curve25519-sha256", "curve25519-sha256@libssh.org",
 		"ecdh-sha2-nistp256", "ecdh-sha2-nistp384", "ecdh-sha2-nistp521",
-		"ecdh-sm2p256v1-sm3", "sm2-sm3",
 	}
 
 	supportedCiphers = []string{
+		"sm4-gcm", "sm4-ctr", "sm4-cbc",
 		"aes128-gcm@openssh.com", "aes256-gcm@openssh.com",
 		"chacha20-poly1305@openssh.com",
 		"aes128-ctr", "aes192-ctr", "aes256-ctr",
-		"sm4-ctr", "sm4-gcm", "sm4-cbc",
 	}
 )
 
@@ -82,7 +83,7 @@ func NewSSHServer(jmsService *service.JMService) *Server {
 	if err != nil {
 		logger.Errorf("Generate SM2 host key failed: %s", err)
 	}
-	hostSigners := []ssh.Signer{singer, sm2Signer}
+	hostSigners := []ssh.Signer{sm2Signer, singer}
 	sshHandler := handler.NewServer(termCfg, jmsService)
 	srv := &ssh.Server{
 		Addr:             addr,
@@ -97,7 +98,20 @@ func NewSSHServer(jmsService *service.JMService) *Server {
 				KeyExchanges: supportedKexAlgos,
 				Ciphers:      supportedCiphers,
 			}
-			return &gossh.ServerConfig{Config: cfg}
+			return &gossh.ServerConfig{
+				Config: cfg,
+				PublicKeyAuthAlgorithms: []string{
+					gossh.KeyAlgoSM2,
+					gossh.KeyAlgoED25519,
+					gossh.KeyAlgoSKED25519,
+					gossh.KeyAlgoSKECDSA256,
+					gossh.KeyAlgoECDSA256,
+					gossh.KeyAlgoECDSA384,
+					gossh.KeyAlgoECDSA521,
+					gossh.KeyAlgoRSASHA256,
+					gossh.KeyAlgoRSASHA512,
+				},
+			}
 		},
 		Handler:                       sshHandler.SessionHandler,
 		LocalPortForwardingCallback:   sshHandler.LocalPortForwardingPermission,

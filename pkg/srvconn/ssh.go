@@ -276,22 +276,26 @@ func createSSHConfig() gossh.Config {
 	cfg.SetDefaults()
 	algos := gossh.SupportedAlgorithms()
 	insecureAlgos := gossh.InsecureAlgorithms()
-	ciphers := make([]string, 0, len(algos.Ciphers)+len(insecureAlgos.Ciphers)+2)
-	/*
-		Change the ciphers order, placing aes128-ctr first.
-		Compatible with old ssh servers.
-	*/
+
+	// 国密算法优先
+	ciphers := make([]string, 0, len(algos.Ciphers)+len(insecureAlgos.Ciphers)+4)
+	ciphers = append(ciphers, gossh.CipherSM4GCM, gossh.CipherSM4CTR, gossh.CipherSM4CBC)
 	ciphers = append(ciphers, gossh.CipherAES128CTR)
 	ciphers = append(ciphers, insecureAlgos.Ciphers...)
 	ciphers = append(ciphers, algos.Ciphers...)
-	ciphers = append(ciphers, gossh.CipherSM4CTR, gossh.CipherSM4GCM, gossh.CipherSM4CBC)
+
 	keyExchanges := make([]string, 0, len(algos.KeyExchanges)+len(insecureAlgos.KeyExchanges)+2)
+	keyExchanges = append(keyExchanges, gossh.KeyExchangeSM2SM3)
 	keyExchanges = append(keyExchanges, insecureAlgos.KeyExchanges...)
 	keyExchanges = append(keyExchanges, algos.KeyExchanges...)
-	keyExchanges = append(keyExchanges, gossh.KeyExchangeSM2SM3)
+
+	macs := make([]string, 0, len(cfg.MACs)+2)
+	macs = append(macs, gossh.HMACSM3, gossh.CBCMAC)
+	macs = append(macs, cfg.MACs...)
+
 	cfg.Ciphers = ciphers
 	cfg.KeyExchanges = keyExchanges
-	cfg.MACs = append(cfg.MACs, gossh.HMACSM3, gossh.CBCMAC)
+	cfg.MACs = macs
 	return cfg
 }
 
@@ -299,10 +303,8 @@ func allHostKeyAlgorithms() []string {
 	supportedAlgos := gossh.SupportedAlgorithms()
 	insecureAlgos := gossh.InsecureAlgorithms()
 	hostKeyAlgos := make([]string, 0, len(supportedAlgos.HostKeys)+len(insecureAlgos.HostKeys)+1)
-	/*
-		Change the algorithm order, placing KeyAlgoED25519 first.
-		Compatible with certain SSH servers.
-	*/
+	// 国密算法优先
+	hostKeyAlgos = append(hostKeyAlgos, gossh.KeyAlgoSM2)
 	hostKeyAlgos = append(hostKeyAlgos, gossh.KeyAlgoED25519)
 	hostKeyAlgos = append(hostKeyAlgos, supportedAlgos.HostKeys...)
 	hostKeyAlgos = append(hostKeyAlgos, insecureAlgos.HostKeys...)
