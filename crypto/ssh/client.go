@@ -114,6 +114,7 @@ func (c *connection) clientHandshake(dialAddress string, config *ClientConfig) e
 
 	c.sessionID = c.transport.getSessionID()
 	c.algorithms = c.transport.getAlgorithms()
+	c.hostKey = c.transport.hostKey
 	debugf(debugLevel1, "KEX done: algorithm %s", c.algorithms.KeyExchange)
 	debugf(debugLevel1, "KEX done: host key algorithm %s", c.algorithms.HostKey)
 	debugf(debugLevel1, "KEX done: client->server cipher: %s MAC: %s", c.algorithms.Write.Cipher, c.algorithms.Write.MAC)

@@ -179,9 +179,10 @@ func main() {
 		if authDesc == "" {
 			authDesc = "GM/T 0129 Password (SM3 challenge-response)"
 		} else {
-			authDesc += " + GM/T 0129 Password (fallback)"
+			authDesc += " + GM/T 0129 Password"
 		}
 		logOK("Configured GM/T 0129 password authentication")
+		logInfo("Password mode: strict (no plaintext password field)")
 	}
 
 	logInfo(fmt.Sprintf("Auth strategy: %s", authDesc))

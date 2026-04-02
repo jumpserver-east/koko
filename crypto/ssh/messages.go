@@ -396,7 +396,8 @@ type gmUserAuthRespondMsg struct {
 	PublicKeyBlob []byte
 }
 
-// gmUserAuthPasswordRespondMsg is sent by the client for password auth (GM/T 0129-2023).
+// gmUserAuthPasswordRespondMsg is sent by the client for password auth
+// (GM/T 0129-2023).
 // Wire format: user_name | service_name | method | response | algorithm_name
 // response = SM3(challenge ‖ SM3(password ‖ salt))
 type gmUserAuthPasswordRespondMsg struct {
@@ -405,7 +406,6 @@ type gmUserAuthPasswordRespondMsg struct {
 	Method        string
 	Response      []byte
 	AlgorithmName string
-	Password      string
 }
 
 type gmKexRequestMsg struct {

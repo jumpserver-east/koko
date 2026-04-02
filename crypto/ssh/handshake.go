@@ -109,6 +109,7 @@ type handshakeTransport struct {
 	hostKeyCallback HostKeyCallback
 	dialAddress     string
 	remoteAddr      net.Addr
+	hostKey         PublicKey
 
 	// bannerCallback is non-empty if we are the client and it has been set in
 	// ClientConfig. In that case it is called during the user authentication
@@ -874,6 +875,7 @@ func (t *handshakeTransport) client(kex kexAlgorithm, magics *handshakeMagics) (
 	if err != nil {
 		return nil, err
 	}
+	t.hostKey = hostKey
 
 	return result, nil
 }

@@ -36,6 +36,12 @@ func SSHPasswordAndPublicKeyAuth(jmsService *service.JMService) SSHAuthFunc {
 			logger.Errorf("SSH conn[%s] no password and publickey", ctx.SessionID())
 			return authErr
 		}
+		if password != "" {
+			if _, _, hasGM := gossh.GetGMAuthDataBySessionID(ctx.SessionID()); hasGM {
+				logger.Errorf("SSH conn[%s] GM/T 0129 strict password auth is unsupported by current Core password API", ctx.SessionID())
+				return authErr
+			}
+		}
 		remoteAddr, _, _ := net.SplitHostPort(ctx.RemoteAddr().String())
 		username := ctx.User()
 		if req, ok := parseDirectLoginReq(jmsService, ctx); ok {

@@ -120,10 +120,9 @@ type ServerConfig struct {
 	// using a password. For standard RFC 4252 password authentication, password
 	// contains the plaintext password. For GM/T 0129-2023 challenge-response
 	// authentication (triggered when the client sends an empty-payload password
-	// request), the transport layer first verifies the response against the
-	// supplied plaintext password, then invokes PasswordCallback with that
-	// plaintext password. conn can be type-asserted to [GMChallengeGetter] to
-	// detect GM auth and retrieve the challenge and salt.
+	// request), the client sends only the spec-shaped response packet, so
+	// PasswordCallback receives the raw GM response bytes and must use
+	// [GetGMAuthData] to verify them against server-side credentials.
 	PasswordCallback func(conn ConnMetadata, password []byte) (*Permissions, error)
 
 	// PublicKeyCallback, if non-nil, is called when a client
@@ -632,9 +631,20 @@ userAuthLoop:
 				if _, err := io.ReadFull(config.Rand, salt); err != nil {
 					return nil, err
 				}
+				hostKey := pickHostKey(config.hostKeys, s.algorithms.HostKey)
+				if hostKey == nil {
+					return nil, errors.New("ssh: unable to sign GM/T 0129 password challenge with negotiated host key")
+				}
+				certificate, signature, err := signGMUserAuthChallenge(config.Rand, hostKey, sessionID,
+					userAuthReq.User, userAuthReq.Service, "password", s.algorithms.HostKey, challenge)
+				if err != nil {
+					return nil, err
+				}
 				if err := s.transport.writePacket(Marshal(&gmUserAuthChallengeMsg{
-					Challenge: challenge,
-					Salt:      salt,
+					Challenge:   challenge,
+					Salt:        salt,
+					Certificate: certificate,
+					Signature:   signature,
 				})); err != nil {
 					return nil, err
 				}
@@ -642,13 +652,12 @@ userAuthLoop:
 				if err != nil {
 					return nil, err
 				}
-				var respond gmUserAuthPasswordRespondMsg
-				if err := Unmarshal(packet, &respond); err != nil {
+				respond, err := parseGMUserAuthPasswordRespond(packet)
+				if err != nil {
 					return nil, err
 				}
-				if !GMPasswordResponseMatches(respond.Password, respond.Response, challenge, salt) {
-					authErr = errors.New("ssh: GM/T 0129 password response verification failed")
-					break
+				if err := validateGMUserAuthPasswordRespond(respond, userAuthReq.User, userAuthReq.Service); err != nil {
+					return nil, err
 				}
 				// Store challenge/salt so PasswordCallback can access them:
 				// - GetGMAuthData(conn) for direct gossh usage
@@ -656,7 +665,7 @@ userAuthLoop:
 				s.gmChallenge = challenge
 				s.gmSalt = salt
 				storeGMAuthData(sessionID, challenge, salt)
-				perms, authErr = authConfig.PasswordCallback(s, []byte(respond.Password))
+				perms, authErr = authConfig.PasswordCallback(s, respond.Response)
 				clearGMAuthData(sessionID)
 				s.gmChallenge = nil
 				s.gmSalt = nil
@@ -696,8 +705,19 @@ userAuthLoop:
 				if _, err := io.ReadFull(config.Rand, challenge); err != nil {
 					return nil, err
 				}
+				hostKey := pickHostKey(config.hostKeys, s.algorithms.HostKey)
+				if hostKey == nil {
+					return nil, errors.New("ssh: unable to sign GM/T 0129 publickey challenge with negotiated host key")
+				}
+				certificate, signature, err := signGMUserAuthChallenge(config.Rand, hostKey, sessionID,
+					userAuthReq.User, userAuthReq.Service, "public_key", s.algorithms.HostKey, challenge)
+				if err != nil {
+					return nil, err
+				}
 				if err := s.transport.writePacket(Marshal(&gmUserAuthChallengeMsg{
-					Challenge: challenge,
+					Challenge:   challenge,
+					Certificate: certificate,
+					Signature:   signature,
 				})); err != nil {
 					return nil, err
 				}
@@ -709,6 +729,9 @@ userAuthLoop:
 				if err := Unmarshal(packet, &respond); err != nil {
 					return nil, err
 				}
+				if err := validateGMUserAuthRespond(&respond, userAuthReq.User, userAuthReq.Service); err != nil {
+					return nil, err
+				}
 
 				pubKey, err := ParsePublicKey(respond.PublicKeyBlob)
 				if err != nil {
@@ -717,7 +740,7 @@ userAuthLoop:
 
 				// Verify the SM2 signature over GM/T 0129 signed data.
 				signedData := buildGM0129SignedData(sessionID, userAuthReq.User, userAuthReq.Service,
-					"public_key", challenge, respond.PublicKeyBlob)
+					"public_key", respond.AlgorithmName, challenge, respond.PublicKeyBlob)
 				sig := &Signature{Format: respond.AlgorithmName, Blob: respond.Response}
 				if err := pubKey.Verify(signedData, sig); err != nil {
 					return nil, err

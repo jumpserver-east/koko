@@ -331,8 +331,8 @@ func handleSession(newChannel ssh.NewChannel, shell, user string) {
 }
 
 // makePasswordCallback creates a GM/T 0129 password auth callback.
-// For GM/T 0129, the server sends a challenge+salt, client responds with
-// SM3(challenge||SM3(password||salt)).
+// For GM/T 0129 strict mode, the server sends a challenge+salt and the client
+// responds with SM3(challenge||SM3(password||salt)).
 func makePasswordCallback(allowedUser, allowedPassword string) func(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 	return func(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 		if conn.User() != allowedUser {
@@ -341,13 +341,20 @@ func makePasswordCallback(allowedUser, allowedPassword string) func(conn ssh.Con
 		}
 
 		// Try GM/T 0129 challenge-response verification
-		if _, _, hasGM := ssh.GetGMAuthData(conn); hasGM {
-			// The transport layer already verified the GM response against the
-			// supplied plaintext password. The callback keeps the existing
-			// username/password authorization behavior for the demo server.
-			if string(password) == allowedPassword {
-				logAuth(fmt.Sprintf("GM/T 0129 password auth OK: user=%s", conn.User()))
-				return nil, nil
+		if challenge, salt, hasGM := ssh.GetGMAuthData(conn); hasGM {
+			expected := ssh.GMPasswordResponse(allowedPassword, challenge, salt)
+			if len(password) == len(expected) {
+				match := true
+				for i := range expected {
+					if password[i] != expected[i] {
+						match = false
+						break
+					}
+				}
+				if match {
+					logAuth(fmt.Sprintf("GM/T 0129 password auth OK: user=%s", conn.User()))
+					return nil, nil
+				}
 			}
 			logAuth(fmt.Sprintf("GM/T 0129 password auth FAILED: user=%s", conn.User()))
 			return nil, fmt.Errorf("GM/T 0129 password auth failed")

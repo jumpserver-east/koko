@@ -161,6 +161,7 @@ type sshConn struct {
 	clientVersion []byte
 	serverVersion []byte
 	algorithms    NegotiatedAlgorithms
+	hostKey       PublicKey
 }
 
 func dup(src []byte) []byte {

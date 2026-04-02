@@ -549,12 +549,13 @@ type GMPublicKeyAuth struct {
 	signer Signer
 }
 
-// buildGM0129SignedData constructs the signed data for GM/T 0129-2023 public_key
+// buildGM0129SignedData constructs the signed data used by GM/T 0129-2023
+// challenge-response authentication.
 //
 //	session_id (string) | SSH_MSG_USERAUTH_REQUEST (byte=50) | user_name (string) |
 //	service_name (string) | method (string) | challenge (string) |
 //	public_key_algorithm_name (string) | public_key_blob (string)
-func buildGM0129SignedData(sessionID []byte, user, service, method string, challenge, pubKeyBlob []byte) []byte {
+func buildGM0129SignedData(sessionID []byte, user, service, method, algoName string, challenge, pubKeyBlob []byte) []byte {
 	var b struct {
 		SessionID  []byte
 		MsgType    byte
@@ -571,7 +572,7 @@ func buildGM0129SignedData(sessionID []byte, user, service, method string, chall
 	b.Service = service
 	b.Method = method
 	b.Challenge = challenge
-	b.AlgoName = KeyAlgoSM2 // "sm2"
+	b.AlgoName = algoName
 	b.PubKeyBlob = pubKeyBlob
 	return Marshal(&b)
 }
@@ -617,6 +618,11 @@ func (g *GMPublicKeyAuth) auth(session []byte, user string, c packetConn, rand i
 			}
 			debugf(debugLevel1, "GM/T 0129 pubkey auth: SSH_MSG_GM_USERAUTH_CHALLENGE(210) received")
 			debugf(debugLevel2, "GM/T 0129 pubkey auth: challenge length = %d bytes", len(challenge.Challenge))
+			if ht, ok := c.(*handshakeTransport); ok {
+				if err := verifyGMUserAuthChallengeSignature(ht.hostKey, session, user, serviceSSH, "public_key", &challenge); err != nil {
+					return authFailure, nil, err
+				}
+			}
 
 			if g.signer == nil {
 				return authFailure, nil, fmt.Errorf("ssh: GM/T 0129 user auth challenge received, but no SM2 signer configured")
@@ -626,7 +632,8 @@ func (g *GMPublicKeyAuth) auth(session []byte, user string, c packetConn, rand i
 			debugf(debugLevel2, "GM/T 0129 pubkey auth: building signed data (session_id|50|user|service|method|challenge|algo|pubkey)")
 
 			// Build signed data per GM/T 0129-2023 and sign it.
-			signedData := buildGM0129SignedData(session, user, serviceSSH, "public_key", challenge.Challenge, pubKeyBlob)
+			signedData := buildGM0129SignedData(session, user, serviceSSH, "public_key",
+				g.signer.PublicKey().Type(), challenge.Challenge, pubKeyBlob)
 			debugf(debugLevel3, "GM/T 0129 pubkey auth: signed data length = %d bytes", len(signedData))
 
 			sig, err := g.signer.Sign(rand, signedData)
@@ -728,6 +735,11 @@ func (g *GMPasswordAuth) auth(session []byte, user string, c packetConn, rand io
 			}
 			debugf(debugLevel1, "GM/T 0129 password auth: SSH_MSG_GM_USERAUTH_CHALLENGE(210) received")
 			debugf(debugLevel2, "GM/T 0129 password auth: challenge = %d bytes, salt = %d bytes", len(challenge.Challenge), len(challenge.Salt))
+			if ht, ok := c.(*handshakeTransport); ok {
+				if err := verifyGMUserAuthChallengeSignature(ht.hostKey, session, user, serviceSSH, "password", &challenge); err != nil {
+					return authFailure, nil, err
+				}
+			}
 
 			// response = SM3(challenge ‖ SM3(password ‖ salt))
 			response := GMPasswordResponse(g.password, challenge.Challenge, challenge.Salt)
@@ -739,7 +751,6 @@ func (g *GMPasswordAuth) auth(session []byte, user string, c packetConn, rand io
 				ServiceName:   serviceSSH,
 				Method:        "password",
 				Response:      response,
-				Password:      g.password,
 				AlgorithmName: "sm3",
 			})); err != nil {
 				return authFailure, nil, err
@@ -767,6 +778,13 @@ func (g *GMPasswordAuth) auth(session []byte, user string, c packetConn, rand io
 // GMPassword returns an AuthMethod for GM/T 0129-2023 password authentication.
 func GMPassword(password string) AuthMethod {
 	return &GMPasswordAuth{password: password}
+}
+
+// GMPasswordStrict returns an AuthMethod for GM/T 0129-2023 password
+// authentication. GM password auth always uses the strict spec-shaped response
+// packet without the legacy plaintext Password field.
+func GMPasswordStrict(password string) AuthMethod {
+	return GMPassword(password)
 }
 
 // KeyboardInteractive returns an AuthMethod using a prompt/response
