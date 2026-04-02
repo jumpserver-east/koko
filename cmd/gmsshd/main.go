@@ -35,7 +35,6 @@ import (
 	"syscall"
 
 	"github.com/emmansun/gmsm/sm2"
-	"github.com/emmansun/gmsm/sm3"
 	ssh "golang.org/x/crypto/ssh"
 )
 
@@ -50,10 +49,10 @@ const (
 )
 
 func logOK(msg string)   { fmt.Printf("  %s✓%s %s\n", colorGreen, colorReset, msg) }
-func logInfo(msg string)  { fmt.Printf("  %s→%s %s\n", colorYellow, colorReset, msg) }
-func logErr(msg string)   { fmt.Printf("  %s✗%s %s\n", colorRed, colorReset, msg) }
-func logConn(msg string)  { fmt.Printf("%s[CONN]%s %s\n", colorCyan, colorReset, msg) }
-func logAuth(msg string)  { fmt.Printf("%s[AUTH]%s %s\n", colorCyan, colorReset, msg) }
+func logInfo(msg string) { fmt.Printf("  %s→%s %s\n", colorYellow, colorReset, msg) }
+func logErr(msg string)  { fmt.Printf("  %s✗%s %s\n", colorRed, colorReset, msg) }
+func logConn(msg string) { fmt.Printf("%s[CONN]%s %s\n", colorCyan, colorReset, msg) }
+func logAuth(msg string) { fmt.Printf("%s[AUTH]%s %s\n", colorCyan, colorReset, msg) }
 
 func main() {
 	// keygen flags
@@ -124,8 +123,8 @@ func main() {
 			ssh.KeyAlgoRSASHA256,
 			ssh.KeyAlgoRSASHA512,
 		},
-		MaxAuthTries: 6,
-		ServerVersion: "SSH-2.0-GMSSHD_1.0",
+		MaxAuthTries:     6,
+		ServerVersion:    "SSH-2.0-GMSSHD_1.0",
 		PasswordCallback: makePasswordCallback(*user, *password),
 	}
 
@@ -332,7 +331,8 @@ func handleSession(newChannel ssh.NewChannel, shell, user string) {
 }
 
 // makePasswordCallback creates a GM/T 0129 password auth callback.
-// For GM/T 0129, the server sends a challenge+salt, client responds with SM3(challenge||SM3(pwd)||salt).
+// For GM/T 0129, the server sends a challenge+salt, client responds with
+// SM3(challenge||SM3(password||salt)).
 func makePasswordCallback(allowedUser, allowedPassword string) func(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 	return func(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
 		if conn.User() != allowedUser {
@@ -341,27 +341,13 @@ func makePasswordCallback(allowedUser, allowedPassword string) func(conn ssh.Con
 		}
 
 		// Try GM/T 0129 challenge-response verification
-		if challenge, salt, hasGM := ssh.GetGMAuthData(conn); hasGM {
-			// Verify: SM3(challenge || SM3(pwd) || salt)
-			pwdHash := sm3.Sum([]byte(allowedPassword))
-			h := sm3.New()
-			h.Write(challenge)
-			h.Write(pwdHash[:])
-			h.Write(salt)
-			expected := h.Sum(nil)
-
-			if len(password) == len(expected) {
-				match := true
-				for i := range expected {
-					if password[i] != expected[i] {
-						match = false
-						break
-					}
-				}
-				if match {
-					logAuth(fmt.Sprintf("GM/T 0129 password auth OK: user=%s", conn.User()))
-					return nil, nil
-				}
+		if _, _, hasGM := ssh.GetGMAuthData(conn); hasGM {
+			// The transport layer already verified the GM response against the
+			// supplied plaintext password. The callback keeps the existing
+			// username/password authorization behavior for the demo server.
+			if string(password) == allowedPassword {
+				logAuth(fmt.Sprintf("GM/T 0129 password auth OK: user=%s", conn.User()))
+				return nil, nil
 			}
 			logAuth(fmt.Sprintf("GM/T 0129 password auth FAILED: user=%s", conn.User()))
 			return nil, fmt.Errorf("GM/T 0129 password auth failed")

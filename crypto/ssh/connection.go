@@ -125,11 +125,8 @@ func clearGMAuthData(sessionID []byte) {
 
 // GetGMAuthData returns the GM/T 0129-2023 challenge and salt for the current
 // password authentication attempt. PasswordCallback implementations can use this
-// to detect GM password auth and verify the response:
-//
-//	response == SM3(challenge || SM3(storedPassword) || salt)
-//
-// Returns ok=false if the current auth is not a GM password challenge-response.
+// to detect GM password auth and apply any GM-specific policy. Returns ok=false
+// if the current auth is not a GM password challenge-response.
 func GetGMAuthData(conn ConnMetadata) (challenge, salt []byte, ok bool) {
 	if c, is := conn.(*connection); is && c.gmChallenge != nil {
 		return c.gmChallenge, c.gmSalt, true

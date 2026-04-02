@@ -120,9 +120,10 @@ type ServerConfig struct {
 	// using a password. For standard RFC 4252 password authentication, password
 	// contains the plaintext password. For GM/T 0129-2023 challenge-response
 	// authentication (triggered when the client sends an empty-payload password
-	// request), password contains the response bytes SM3(challenge‖SM3(pwd)‖salt),
-	// and conn can be type-asserted to [GMChallengeGetter] to retrieve the
-	// challenge and salt used for verification.
+	// request), the transport layer first verifies the response against the
+	// supplied plaintext password, then invokes PasswordCallback with that
+	// plaintext password. conn can be type-asserted to [GMChallengeGetter] to
+	// detect GM auth and retrieve the challenge and salt.
 	PasswordCallback func(conn ConnMetadata, password []byte) (*Permissions, error)
 
 	// PublicKeyCallback, if non-nil, is called when a client
@@ -644,6 +645,10 @@ userAuthLoop:
 				var respond gmUserAuthPasswordRespondMsg
 				if err := Unmarshal(packet, &respond); err != nil {
 					return nil, err
+				}
+				if !GMPasswordResponseMatches(respond.Password, respond.Response, challenge, salt) {
+					authErr = errors.New("ssh: GM/T 0129 password response verification failed")
+					break
 				}
 				// Store challenge/salt so PasswordCallback can access them:
 				// - GetGMAuthData(conn) for direct gossh usage

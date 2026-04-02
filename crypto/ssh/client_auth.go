@@ -11,8 +11,6 @@ import (
 	"io"
 	"slices"
 	"strings"
-
-	"github.com/emmansun/gmsm/sm3"
 )
 
 type authResult int
@@ -681,7 +679,7 @@ func GMPublicKeys(signer Signer) AuthMethod {
 }
 
 // GMPasswordAuth is an AuthMethod that implements GM/T 0129-2023
-// response = SM3(challenge ‖ SM3(password) ‖ salt)
+// response = SM3(challenge ‖ SM3(password ‖ salt))
 type GMPasswordAuth struct {
 	password string
 }
@@ -731,14 +729,9 @@ func (g *GMPasswordAuth) auth(session []byte, user string, c packetConn, rand io
 			debugf(debugLevel1, "GM/T 0129 password auth: SSH_MSG_GM_USERAUTH_CHALLENGE(210) received")
 			debugf(debugLevel2, "GM/T 0129 password auth: challenge = %d bytes, salt = %d bytes", len(challenge.Challenge), len(challenge.Salt))
 
-			// response = SM3(challenge ‖ SM3(password) ‖ salt)
-			passwdHash := sm3.Sum([]byte(g.password))
-			h := sm3.New()
-			h.Write(challenge.Challenge)
-			h.Write(passwdHash[:])
-			h.Write(challenge.Salt)
-			response := h.Sum(nil)
-			debugf(debugLevel2, "GM/T 0129 password auth: computed response = SM3(challenge || SM3(password) || salt)")
+			// response = SM3(challenge ‖ SM3(password ‖ salt))
+			response := GMPasswordResponse(g.password, challenge.Challenge, challenge.Salt)
+			debugf(debugLevel2, "GM/T 0129 password auth: computed response = SM3(challenge || SM3(password || salt))")
 
 			debugf(debugLevel1, "GM/T 0129 password auth: sending SSH_MSG_GM_USERAUTH_RESPOND(211)")
 			if err := c.writePacket(Marshal(&gmUserAuthPasswordRespondMsg{

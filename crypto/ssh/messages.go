@@ -398,7 +398,7 @@ type gmUserAuthRespondMsg struct {
 
 // gmUserAuthPasswordRespondMsg is sent by the client for password auth (GM/T 0129-2023).
 // Wire format: user_name | service_name | method | response | algorithm_name
-// response = SM3(challenge ‖ SM3(password) ‖ salt)
+// response = SM3(challenge ‖ SM3(password ‖ salt))
 type gmUserAuthPasswordRespondMsg struct {
 	UserName      string `sshtype:"211"`
 	ServiceName   string
