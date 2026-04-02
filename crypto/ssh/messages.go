@@ -413,7 +413,7 @@ type gmKexRequestMsg struct {
 }
 
 type gmKexReplyMsg struct {
-	HostKey      []byte `sshtype:"201"`
+	Certificate  []byte `sshtype:"201"`
 	RandomServer []byte
 	Signature    []byte
 }

@@ -18,6 +18,7 @@ import (
 	"math/big"
 	"slices"
 
+	"github.com/emmansun/gmsm/smx509"
 	"golang.org/x/crypto/curve25519"
 )
 
@@ -68,6 +69,10 @@ type kexResult struct {
 	// it is used for signature verification instead of H.
 	// GM/T 0129 signs random_client||random_server, not H.
 	SignedData []byte
+
+	// HostCertificates carries parsed server certificates for KEX methods
+	// that transport X.509 certificates on the wire.
+	HostCertificates []*smx509.Certificate
 }
 
 // handshakeMagics contains data that is always included in the

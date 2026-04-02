@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -35,6 +36,7 @@ import (
 	"syscall"
 
 	"github.com/emmansun/gmsm/sm2"
+	"github.com/emmansun/gmsm/smx509"
 	ssh "golang.org/x/crypto/ssh"
 )
 
@@ -67,7 +69,7 @@ func main() {
 	user := flag.String("user", "admin", "Allowed username")
 	password := flag.String("password", "admin", "Allowed password (for GM/T 0129 password auth)")
 	authorizedKeys := flag.String("authorized-keys", "", "Path to authorized_keys file (for SM2 public key auth)")
-	hostKeyFile := flag.String("hostkey", "", "Path to SM2 host key file (auto-generated if empty)")
+	hostKeyFile := flag.String("hostkey", "", "Path to SM2 host key file (persisted self-signed GM host certificates are generated alongside it)")
 	shell := flag.String("shell", "", "Shell to run (default: $SHELL or /bin/sh)")
 	verbose := flag.Bool("v", false, "Verbose debug output")
 	flag.Parse()
@@ -173,6 +175,9 @@ func main() {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			logErr(fmt.Sprintf("Accept error: %v", err))
 			continue
 		}
@@ -391,13 +396,44 @@ func makePublicKeyCallback(allowedUser string, authorizedKeys map[string]bool) f
 
 func loadOrGenerateHostKey(path string) (ssh.Signer, error) {
 	if path != "" {
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			return nil, fmt.Errorf("create host key directory: %w", err)
+		}
+
 		data, err := os.ReadFile(path)
-		if err != nil {
+		var signer ssh.Signer
+		if err == nil {
+			signer, err = ssh.ParsePrivateKey(data)
+			if err != nil {
+				return nil, fmt.Errorf("parse host key: %w", err)
+			}
+			if err := ensurePersistentGMKexCertificateBundle(path, signer); err != nil {
+				return nil, err
+			}
+			return signer, nil
+		}
+		if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("read host key: %w", err)
 		}
-		signer, err := ssh.ParsePrivateKey(data)
+
+		logInfo(fmt.Sprintf("Generating persistent SM2 host key: %s", path))
+		key, err := sm2.GenerateKey(rand.Reader)
 		if err != nil {
-			return nil, fmt.Errorf("parse host key: %w", err)
+			return nil, fmt.Errorf("generate SM2 key: %w", err)
+		}
+		block, err := ssh.MarshalPrivateKey(key, "")
+		if err != nil {
+			return nil, fmt.Errorf("marshal host key: %w", err)
+		}
+		if err := os.WriteFile(path, pem.EncodeToMemory(block), 0600); err != nil {
+			return nil, fmt.Errorf("write host key: %w", err)
+		}
+		signer, err = ssh.NewSignerFromKey(key)
+		if err != nil {
+			return nil, err
+		}
+		if err := ensurePersistentGMKexCertificateBundle(path, signer); err != nil {
+			return nil, err
 		}
 		return signer, nil
 	}
@@ -408,7 +444,122 @@ func loadOrGenerateHostKey(path string) (ssh.Signer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generate SM2 key: %w", err)
 	}
+	logInfo("GM/T 0129 dual certificates stay ephemeral when -hostkey is empty")
 	return ssh.NewSignerFromKey(key)
+}
+
+func ensurePersistentGMKexCertificateBundle(hostKeyPath string, signer ssh.Signer) error {
+	signCertPath, encCertPath, encKeyPath := gmKexArtifactPaths(hostKeyPath)
+
+	bundle, err := loadGMKexCertificateBundle(signCertPath, encCertPath, encKeyPath)
+	if err == nil {
+		if err := ssh.RegisterGMKexCertificateBundle(signer.PublicKey(), bundle); err == nil {
+			logInfo(fmt.Sprintf("Loaded GM/T 0129 self-signed signing certificate: %s", signCertPath))
+			logInfo(fmt.Sprintf("Loaded GM/T 0129 self-signed encryption certificate: %s", encCertPath))
+			return nil
+		}
+		logInfo("Persisted GM/T 0129 certificates do not match current host key, regenerating")
+	} else if !os.IsNotExist(err) {
+		logInfo(fmt.Sprintf("Failed to load persisted GM/T 0129 certificates: %v", err))
+	}
+
+	bundle, err = ssh.NewSelfSignedGMKexCertificateBundle(rand.Reader, signer, "gmsshd-host")
+	if err != nil {
+		return fmt.Errorf("generate GM/T 0129 certificate bundle: %w", err)
+	}
+	if err := saveGMKexCertificateBundle(bundle, signCertPath, encCertPath, encKeyPath); err != nil {
+		return err
+	}
+	if err := ssh.RegisterGMKexCertificateBundle(signer.PublicKey(), bundle); err != nil {
+		return err
+	}
+	logInfo(fmt.Sprintf("Saved GM/T 0129 self-signed signing certificate: %s", signCertPath))
+	logInfo(fmt.Sprintf("Saved GM/T 0129 self-signed encryption certificate: %s", encCertPath))
+	logInfo(fmt.Sprintf("Saved GM/T 0129 encryption private key: %s", encKeyPath))
+	return nil
+}
+
+func gmKexArtifactPaths(hostKeyPath string) (signCertPath, encCertPath, encKeyPath string) {
+	return hostKeyPath + ".gm-sign-cert.pem", hostKeyPath + ".gm-enc-cert.pem", hostKeyPath + ".gm-enc-key"
+}
+
+func loadGMKexCertificateBundle(signCertPath, encCertPath, encKeyPath string) (*ssh.GMKexCertificateBundle, error) {
+	signingCert, err := loadCertificatePEM(signCertPath)
+	if err != nil {
+		return nil, err
+	}
+	encryptionCert, err := loadCertificatePEM(encCertPath)
+	if err != nil {
+		return nil, err
+	}
+	encryptionKey, err := loadSM2PrivateKey(encKeyPath)
+	if err != nil {
+		return nil, err
+	}
+	return ssh.NewGMKexCertificateBundle(signingCert.Raw, encryptionCert.Raw, encryptionKey)
+}
+
+func saveGMKexCertificateBundle(bundle *ssh.GMKexCertificateBundle, signCertPath, encCertPath, encKeyPath string) error {
+	if err := saveCertificatePEM(signCertPath, bundle.SigningCertificate()); err != nil {
+		return err
+	}
+	if err := saveCertificatePEM(encCertPath, bundle.EncryptionCertificate()); err != nil {
+		return err
+	}
+	return saveSM2PrivateKey(encKeyPath, bundle.EncryptionKey())
+}
+
+func loadCertificatePEM(path string) (*smx509.Certificate, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	cert, err := smx509.ParseCertificatePEM(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse certificate %s: %w", path, err)
+	}
+	return cert, nil
+}
+
+func saveCertificatePEM(path string, cert *smx509.Certificate) error {
+	if cert == nil {
+		return fmt.Errorf("certificate for %s is nil", path)
+	}
+	block := &pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0644); err != nil {
+		return fmt.Errorf("write certificate %s: %w", path, err)
+	}
+	return nil
+}
+
+func loadSM2PrivateKey(path string) (*sm2.PrivateKey, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	rawKey, err := ssh.ParseRawPrivateKey(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse SM2 private key %s: %w", path, err)
+	}
+	key, ok := rawKey.(*sm2.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("private key %s is %T, want *sm2.PrivateKey", path, rawKey)
+	}
+	return key, nil
+}
+
+func saveSM2PrivateKey(path string, key *sm2.PrivateKey) error {
+	if key == nil {
+		return fmt.Errorf("private key for %s is nil", path)
+	}
+	block, err := ssh.MarshalPrivateKey(key, "")
+	if err != nil {
+		return fmt.Errorf("marshal SM2 private key %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0600); err != nil {
+		return fmt.Errorf("write SM2 private key %s: %w", path, err)
+	}
+	return nil
 }
 
 func loadAuthorizedKeys(path string) (map[string]bool, error) {

@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/emmansun/gmsm/sm2"
+	"github.com/emmansun/gmsm/smx509"
 	ssh "golang.org/x/crypto/ssh"
 	"golang.org/x/term"
 )
@@ -94,6 +95,7 @@ func main() {
 	cipherAlgo := flag.String("cipher", "sm4-ctr", "Cipher algorithm (sm4-ctr, sm4-gcm, sm4-cbc)")
 	macAlgo := flag.String("mac", "hmac-sm3", "MAC algorithm (hmac-sm3, cbc-mac)")
 	hostKeyAlgo := flag.String("hostkey", "sm2", "Host key algorithm")
+	hostCertCA := flag.String("hostcert-ca", "", "Path to PEM root certificate(s) for GM host certificate verification")
 	timeout := flag.Duration("timeout", 30*time.Second, "Connection timeout")
 
 	// Verbose flags: -v, -vv, -vvv (like ssh)
@@ -194,6 +196,42 @@ func main() {
 	logInfo(fmt.Sprintf("Cipher:  %s", *cipherAlgo))
 	logInfo(fmt.Sprintf("MAC:     %s", *macAlgo))
 	logInfo(fmt.Sprintf("HostKey: %s", *hostKeyAlgo))
+	if *hostCertCA != "" {
+		logInfo(fmt.Sprintf("HostCert CA: %s", *hostCertCA))
+	}
+
+	var gmHostCertificateCallback ssh.GMHostCertificateCallback
+	if *hostCertCA != "" {
+		rootPEM, err := os.ReadFile(*hostCertCA)
+		if err != nil {
+			log.Fatalf("Failed to read GM host certificate root file %s: %v", *hostCertCA, err)
+		}
+		roots := smx509.NewCertPool()
+		if !roots.AppendCertsFromPEM(rootPEM) {
+			log.Fatalf("Failed to parse any certificate from %s", *hostCertCA)
+		}
+		logOK(fmt.Sprintf("Loaded GM host certificate root(s) from: %s", *hostCertCA))
+
+		gmHostCertificateCallback = func(hostname string, remote net.Addr, signingCert, encryptionCert *smx509.Certificate) error {
+			opts := smx509.VerifyOptions{
+				Roots:       roots,
+				CurrentTime: time.Now(),
+				KeyUsages:   []smx509.ExtKeyUsage{smx509.ExtKeyUsageAny},
+			}
+			if _, err := signingCert.Verify(opts); err != nil {
+				return fmt.Errorf("verify GM signing certificate: %w", err)
+			}
+			logOK(fmt.Sprintf("GM signing certificate verified: %s", signingCert.Subject.CommonName))
+
+			if encryptionCert != nil {
+				if _, err := encryptionCert.Verify(opts); err != nil {
+					return fmt.Errorf("verify GM encryption certificate: %w", err)
+				}
+				logOK(fmt.Sprintf("GM encryption certificate verified: %s", encryptionCert.Subject.CommonName))
+			}
+			return nil
+		}
+	}
 
 	config := &ssh.ClientConfig{
 		User: *user,
@@ -203,7 +241,8 @@ func main() {
 			Ciphers:      []string{*cipherAlgo},
 			MACs:         []string{*macAlgo},
 		},
-		HostKeyAlgorithms: []string{*hostKeyAlgo},
+		HostKeyAlgorithms:         []string{*hostKeyAlgo},
+		GMHostCertificateCallback: gmHostCertificateCallback,
 		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
 			logOK(fmt.Sprintf("Host key type:        %s", key.Type()))
 			logOK(fmt.Sprintf("Host key fingerprint: %s", fingerprint(key)))

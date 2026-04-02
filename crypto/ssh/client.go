@@ -12,6 +12,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/emmansun/gmsm/smx509"
 )
 
 // Client implements a traditional SSH client that supports shells,
@@ -213,6 +215,12 @@ func Dial(network, addr string, config *ClientConfig) (*Client, error) {
 // net.Conn underlying the SSH connection.
 type HostKeyCallback func(hostname string, remote net.Addr, key PublicKey) error
 
+// GMHostCertificateCallback is invoked after the GM/T 0129 host key signature
+// is verified when the server provided X.509 certificates in the key exchange.
+// The signing certificate is always non-nil. The encryption certificate may be
+// nil for single-certificate replies.
+type GMHostCertificateCallback func(hostname string, remote net.Addr, signingCert, encryptionCert *smx509.Certificate) error
+
 // BannerCallback is the function type used for treat the banner sent by
 // the server. A BannerCallback receives the message sent by the remote server.
 type BannerCallback func(message string) error
@@ -238,6 +246,11 @@ type ClientConfig struct {
 	// to succeed. The functions InsecureIgnoreHostKey or
 	// FixedHostKey can be used for simplistic host key checks.
 	HostKeyCallback HostKeyCallback
+
+	// GMHostCertificateCallback, if non-nil, is called during a GM/T 0129
+	// key exchange after the server's KEX signature has been verified and
+	// before HostKeyCallback is invoked.
+	GMHostCertificateCallback GMHostCertificateCallback
 
 	// BannerCallback is called during the SSH dance to display a custom
 	// server's message. The client configuration can supply this callback to

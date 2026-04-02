@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/emmansun/gmsm/smx509"
 )
 
 // debugHandshake, if set, prints messages sent and received.  Key
@@ -106,10 +108,11 @@ type handshakeTransport struct {
 	kexLoopDone chan struct{} // closed (with writeError non-nil) when kexLoop exits
 
 	// data for host key checking
-	hostKeyCallback HostKeyCallback
-	dialAddress     string
-	remoteAddr      net.Addr
-	hostKey         PublicKey
+	hostKeyCallback           HostKeyCallback
+	gmHostCertificateCallback GMHostCertificateCallback
+	dialAddress               string
+	remoteAddr                net.Addr
+	hostKey                   PublicKey
 
 	// bannerCallback is non-empty if we are the client and it has been set in
 	// ClientConfig. In that case it is called during the user authentication
@@ -162,6 +165,7 @@ func newClientTransport(conn keyingTransport, clientVersion, serverVersion []byt
 	t.dialAddress = dialAddr
 	t.remoteAddr = addr
 	t.hostKeyCallback = config.HostKeyCallback
+	t.gmHostCertificateCallback = config.GMHostCertificateCallback
 	t.bannerCallback = config.BannerCallback
 	if config.HostKeyAlgorithms != nil {
 		t.hostKeyAlgorithms = config.HostKeyAlgorithms
@@ -869,6 +873,19 @@ func (t *handshakeTransport) client(kex kexAlgorithm, magics *handshakeMagics) (
 
 	if err := verifyHostKeySignature(hostKey, t.algorithms.HostKey, result); err != nil {
 		return nil, err
+	}
+
+	if t.gmHostCertificateCallback != nil && t.algorithms.KeyExchange == KeyExchangeSM2SM3 {
+		if len(result.HostCertificates) == 0 {
+			return nil, errors.New("ssh: missing GM/T 0129 host certificates")
+		}
+		var encryptionCert *smx509.Certificate
+		if len(result.HostCertificates) > 1 {
+			encryptionCert = result.HostCertificates[1]
+		}
+		if err := t.gmHostCertificateCallback(t.dialAddress, t.remoteAddr, result.HostCertificates[0], encryptionCert); err != nil {
+			return nil, err
+		}
 	}
 
 	err = t.hostKeyCallback(t.dialAddress, t.remoteAddr, hostKey)
