@@ -6,13 +6,13 @@ import (
 	"net"
 	"strconv"
 	"sync"
-	"time"
 
 	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/jumpserver-dev/sdk-go/model"
 	"github.com/jumpserver/koko/pkg/config"
 	"github.com/jumpserver/koko/pkg/logger"
+	"github.com/jumpserver/koko/pkg/srvconn"
 )
 
 type domainGateway struct {
@@ -100,32 +100,25 @@ func (d *domainGateway) getAvailableGateway() bool {
 }
 
 func (d *domainGateway) createGatewaySSHClient(gateway *model.Gateway) (*gossh.Client, error) {
-	configTimeout := time.Duration(config.GetConf().SSHTimeout)
-	auths := make([]gossh.AuthMethod, 0, 3)
 	loginAccount := gateway.Account
-	if loginAccount.IsSSHKey() {
-		if signer, err1 := gossh.ParsePrivateKey([]byte(loginAccount.Secret)); err1 == nil {
-			auths = append(auths, gossh.PublicKeys(signer))
-		} else {
-			logger.Errorf("Domain gateway Parse private key error: %s", err1)
-		}
-	} else {
-		auths = append(auths, gossh.Password(loginAccount.Secret))
-		auths = append(auths, gossh.KeyboardInteractive(func(user, instruction string,
-			questions []string, echos []bool) (answers []string, err error) {
-			return []string{loginAccount.Secret}, nil
-		}))
-	}
-	sshConfig := gossh.ClientConfig{
-		User:            loginAccount.Username,
-		Auth:            auths,
-		ClientVersion:   "CSSH-1.0-JumpServer",
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
-		Timeout:         configTimeout * time.Second,
-	}
 	port := gateway.Protocols.GetProtocolPort(model.ProtocolSSH)
-	addr := net.JoinHostPort(gateway.Address, strconv.Itoa(port))
-	return gossh.Dial("tcp", addr, &sshConfig)
+	opts := []srvconn.SSHClientOption{
+		srvconn.SSHClientHost(gateway.Address),
+		srvconn.SSHClientPort(port),
+		srvconn.SSHClientUsername(loginAccount.Username),
+		srvconn.SSHClientTimeout(config.GetConf().SSHTimeout),
+	}
+	if loginAccount.IsSSHKey() {
+		opts = append(opts, srvconn.SSHClientPrivateKey(loginAccount.Secret))
+	} else {
+		opts = append(opts, srvconn.SSHClientPassword(loginAccount.Secret))
+	}
+
+	sshClient, err := srvconn.NewSSHClient(opts...)
+	if err != nil {
+		return nil, err
+	}
+	return sshClient.Client, nil
 }
 
 func (d *domainGateway) Stop() {

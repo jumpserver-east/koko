@@ -14,6 +14,8 @@ import (
 	"github.com/jumpserver/koko/pkg/logger"
 )
 
+const sshClientVersion = "SSH-2.0-CSSH-1.0-JumpServer"
+
 type SSHClientOption func(conf *SSHClientOptions)
 
 type SSHClientOptions struct {
@@ -30,28 +32,16 @@ type SSHClientOptions struct {
 	proxySSHClientOptions []SSHClientOptions
 }
 
+type sshClientAttempt struct {
+	label  string
+	config *gossh.ClientConfig
+}
+
 func (cfg *SSHClientOptions) AuthMethods() []gossh.AuthMethod {
 	authMethods := make([]gossh.AuthMethod, 0, 3)
 
-	if cfg.PrivateKey != "" {
-		var (
-			signer gossh.Signer
-			err    error
-		)
-		if cfg.Passphrase != "" {
-			// 先使用 passphrase 解析 PrivateKey
-			if signer, err = gossh.ParsePrivateKeyWithPassphrase([]byte(cfg.PrivateKey),
-				[]byte(cfg.Passphrase)); err == nil {
-				authMethods = append(authMethods, gossh.PublicKeys(signer))
-			}
-		}
-		if err != nil || cfg.Passphrase == "" {
-			// 1. 如果之前使用解析失败，则去掉 passphrase，则尝试直接解析 PrivateKey 防止错误的passphrase
-			// 2. 如果没有 Passphrase 则直接解析 PrivateKey
-			if signer, err = gossh.ParsePrivateKey([]byte(cfg.PrivateKey)); err == nil {
-				authMethods = append(authMethods, gossh.PublicKeys(signer))
-			}
-		}
+	if signer := cfg.parsePrivateKeySigner(); signer != nil {
+		authMethods = append(authMethods, gossh.PublicKeys(signer))
 	}
 	if cfg.PrivateAuth != nil {
 		authMethods = append(authMethods, gossh.PublicKeys(cfg.PrivateAuth))
@@ -73,6 +63,79 @@ func (cfg *SSHClientOptions) AuthMethods() []gossh.AuthMethod {
 	}
 
 	return authMethods
+}
+
+func (cfg *SSHClientOptions) GMAuthMethods() []gossh.AuthMethod {
+	authMethods := make([]gossh.AuthMethod, 0, 3)
+
+	if signer := cfg.parsePrivateKeySigner(); signer != nil && signer.PublicKey().Type() == gossh.KeyAlgoSM2 {
+		authMethods = append(authMethods, gossh.GMPublicKeys(signer))
+	}
+	if cfg.PrivateAuth != nil && cfg.PrivateAuth.PublicKey().Type() == gossh.KeyAlgoSM2 {
+		authMethods = append(authMethods, gossh.GMPublicKeys(cfg.PrivateAuth))
+	}
+	if cfg.Password != "" {
+		authMethods = append(authMethods, gossh.GMPassword(cfg.Password))
+	}
+
+	return authMethods
+}
+
+func (cfg *SSHClientOptions) parsePrivateKeySigner() gossh.Signer {
+	if cfg.PrivateKey == "" {
+		return nil
+	}
+
+	var (
+		signer gossh.Signer
+		err    error
+	)
+	if cfg.Passphrase != "" {
+		// 先使用 passphrase 解析 PrivateKey
+		if signer, err = gossh.ParsePrivateKeyWithPassphrase([]byte(cfg.PrivateKey),
+			[]byte(cfg.Passphrase)); err == nil {
+			return signer
+		}
+	}
+
+	// 1. 如果之前使用解析失败，则去掉 passphrase，则尝试直接解析 PrivateKey 防止错误的passphrase
+	// 2. 如果没有 Passphrase 则直接解析 PrivateKey
+	if signer, err = gossh.ParsePrivateKey([]byte(cfg.PrivateKey)); err == nil {
+		return signer
+	}
+
+	return nil
+}
+
+func (cfg *SSHClientOptions) clientConfig(auth []gossh.AuthMethod) *gossh.ClientConfig {
+	return &gossh.ClientConfig{
+		User:              cfg.Username,
+		Auth:              auth,
+		ClientVersion:     sshClientVersion,
+		Timeout:           time.Duration(cfg.Timeout) * time.Second,
+		HostKeyCallback:   gossh.InsecureIgnoreHostKey(),
+		Config:            createSSHConfig(),
+		HostKeyAlgorithms: allHostKeyAlgorithms(),
+	}
+}
+
+func (cfg *SSHClientOptions) clientConfigAttempts() []sshClientAttempt {
+	attempts := make([]sshClientAttempt, 0, 2)
+	if gmAuth := cfg.GMAuthMethods(); len(gmAuth) > 0 {
+		attempts = append(attempts, sshClientAttempt{
+			label:  "gm",
+			config: cfg.clientConfig(gmAuth),
+		})
+	}
+
+	classicAuth := cfg.AuthMethods()
+	if len(classicAuth) > 0 || len(attempts) == 0 {
+		attempts = append(attempts, sshClientAttempt{
+			label:  "classic",
+			config: cfg.clientConfig(classicAuth),
+		})
+	}
+	return attempts
 }
 
 func SSHClientUsername(username string) SSHClientOption {
@@ -162,17 +225,8 @@ func getAvailableProxyClient(cfgs ...SSHClientOptions) (*SSHClient, error) {
 }
 
 func NewSSHClientWithCfg(cfg *SSHClientOptions) (*SSHClient, error) {
-	gosshCfg := gossh.ClientConfig{
-		User:            cfg.Username,
-		Auth:            cfg.AuthMethods(),
-		ClientVersion:   "CSSH-1.0-JumpServer",
-		Timeout:         time.Duration(cfg.Timeout) * time.Second,
-		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
-		Config:          createSSHConfig(),
-
-		HostKeyAlgorithms: allHostKeyAlgorithms(),
-	}
 	destAddr := net.JoinHostPort(cfg.Host, cfg.Port)
+	attempts := cfg.clientConfigAttempts()
 	if len(cfg.proxySSHClientOptions) > 0 {
 		proxyClient, err := getAvailableProxyClient(cfg.proxySSHClientOptions...)
 		if err != nil {
@@ -180,28 +234,76 @@ func NewSSHClientWithCfg(cfg *SSHClientOptions) (*SSHClient, error) {
 			return nil, err
 		}
 		logger.Infof("Get gateway client(%s) success ", proxyClient)
-		destConn, err := proxyClient.Dial("tcp", destAddr)
+		gosshClient, err := dialProxySSHWithFallback(proxyClient, destAddr, attempts)
 		if err != nil {
 			_ = proxyClient.Close()
-			return nil, fmt.Errorf("%w: %s", ErrGatewayDial, err)
+			return nil, err
 		}
-		proxyConn, chans, reqs, err := gossh.NewClientConn(destConn, destAddr, &gosshCfg)
-		if err != nil {
-			_ = proxyClient.Close()
-			_ = destConn.Close()
-			return nil, fmt.Errorf("%w: %s", ErrSSHClient, err)
-		}
-		gosshClient := gossh.NewClient(proxyConn, chans, reqs)
 		return &SSHClient{Cfg: cfg, Client: gosshClient,
 			traceSessionMap: make(map[*gossh.Session]time.Time),
 			ProxyClient:     proxyClient}, nil
 	}
-	gosshClient, err := gossh.Dial("tcp", destAddr, &gosshCfg)
+
+	gosshClient, err := dialDirectSSHWithFallback(destAddr, time.Duration(cfg.Timeout)*time.Second, attempts)
 	if err != nil {
 		return nil, err
 	}
 	return &SSHClient{Client: gosshClient, Cfg: cfg,
 		traceSessionMap: make(map[*gossh.Session]time.Time)}, nil
+}
+
+func dialDirectSSHWithFallback(destAddr string, timeout time.Duration, attempts []sshClientAttempt) (*gossh.Client, error) {
+	var lastErr error
+	for i, attempt := range attempts {
+		conn, err := net.DialTimeout("tcp", destAddr, timeout)
+		if err != nil {
+			return nil, err
+		}
+
+		clientConn, chans, reqs, err := gossh.NewClientConn(conn, destAddr, attempt.config)
+		if err == nil {
+			if i > 0 {
+				logger.Infof("SSH dial %s fallback succeeded with %s mode", destAddr, attempt.label)
+			}
+			return gossh.NewClient(clientConn, chans, reqs), nil
+		}
+
+		lastErr = err
+		_ = conn.Close()
+		logSSHAttemptFallback(destAddr, attempts, i, err)
+	}
+	return nil, fmt.Errorf("%w: %s", ErrSSHClient, lastErr)
+}
+
+func dialProxySSHWithFallback(proxyClient *SSHClient, destAddr string, attempts []sshClientAttempt) (*gossh.Client, error) {
+	var lastErr error
+	for i, attempt := range attempts {
+		destConn, err := proxyClient.Dial("tcp", destAddr)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s", ErrGatewayDial, err)
+		}
+
+		clientConn, chans, reqs, err := gossh.NewClientConn(destConn, destAddr, attempt.config)
+		if err == nil {
+			if i > 0 {
+				logger.Infof("SSH dial %s via proxy fallback succeeded with %s mode", destAddr, attempt.label)
+			}
+			return gossh.NewClient(clientConn, chans, reqs), nil
+		}
+
+		lastErr = err
+		_ = destConn.Close()
+		logSSHAttemptFallback(destAddr, attempts, i, err)
+	}
+	return nil, fmt.Errorf("%w: %s", ErrSSHClient, lastErr)
+}
+
+func logSSHAttemptFallback(destAddr string, attempts []sshClientAttempt, idx int, err error) {
+	if idx+1 >= len(attempts) {
+		return
+	}
+	logger.Warnf("SSH dial %s with %s mode failed: %v; fallback to %s mode",
+		destAddr, attempts[idx].label, err, attempts[idx+1].label)
 }
 
 type SSHClient struct {
