@@ -119,6 +119,7 @@ func (d *domainGateway) createGatewaySSHClient(gateway *model.Gateway) (*gossh.C
 	sshConfig := gossh.ClientConfig{
 		User:            loginAccount.Username,
 		Auth:            auths,
+		ClientVersion:   "CSSH-1.0-JumpServer",
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 		Timeout:         configTimeout * time.Second,
 	}

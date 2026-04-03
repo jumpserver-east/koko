@@ -38,6 +38,8 @@ type gmt0129KEX struct{}
 
 const gmt0129RandomSize = 8
 
+var gmKexSessionKeyEncrypterOpts = sm2.NewPlainEncrypterOpts(sm2.MarshalUncompressed, sm2.C1C3C2)
+
 // GMKexCertificateBundle holds the signing/encryption certificate pair used by
 // the GM/T 0129 key exchange reply.
 type GMKexCertificateBundle struct {
@@ -130,6 +132,27 @@ func parsePublicKeyWithRest(in []byte) (out PublicKey, rest []byte, err error) {
 	}
 
 	return parsePubKey(in, string(algo))
+}
+
+func encryptGMKexSessionKey(rand io.Reader, pub *ecdsa.PublicKey, sessionKey []byte) ([]byte, error) {
+	return sm2.Encrypt(rand, pub, sessionKey, gmKexSessionKeyEncrypterOpts)
+}
+
+func marshalGMKexReplySignature(format string, signature []byte) []byte {
+	return Marshal(&Signature{
+		Format: format,
+		Blob:   append([]byte(nil), signature...),
+	})
+}
+
+func signGMKexReply(rand io.Reader, signer AlgorithmSigner, data []byte, algo string) (wireSignature, marshaledSignature []byte, err error) {
+	sig, err := signer.SignWithAlgorithm(rand, data, underlyingAlgo(algo))
+	if err != nil {
+		return nil, nil, err
+	}
+	wireSignature = append([]byte(nil), sig.Blob...)
+	marshaledSignature = Marshal(sig)
+	return wireSignature, marshaledSignature, nil
 }
 
 func (b *GMKexCertificateBundle) SigningCertificate() *smx509.Certificate {
@@ -390,8 +413,9 @@ func (kex *gmt0129KEX) Client(c packetConn, rand io.Reader, magics *handshakeMag
 	}
 	debugf(debugLevel2, "GM/T 0129: generated 32-byte session key K")
 
-	// 6. SM2 encrypt K with server's public key (ASN.1 DER per GB/T 35276)
-	encK, err := sm2.EncryptASN1(rand, sm2Pub, sessionKey)
+	// 6. SM2 encrypt K with the server's encryption certificate key.
+	// GM/T 0129 packet captures use plain SM2 ciphertext on the wire.
+	encK, err := encryptGMKexSessionKey(rand, sm2Pub, sessionKey)
 	if err != nil {
 		return nil, err
 	}
@@ -433,7 +457,7 @@ func (kex *gmt0129KEX) Client(c packetConn, rand io.Reader, magics *handshakeMag
 		H:                hSum,
 		K:                K,
 		HostKey:          signingKey.Marshal(),
-		Signature:        reply.Signature,
+		Signature:        marshalGMKexReplySignature(signingKey.Type(), reply.Signature),
 		HashFunc:         sm3.New,
 		SignedData:       signedData,
 		HostCertificates: hostCertificates,
@@ -468,7 +492,7 @@ func (kex *gmt0129KEX) Server(c packetConn, rand io.Reader, magics *handshakeMag
 	signedData = append(signedData, randomServer...)
 
 	debugf(debugLevel2, "GM/T 0129: signing random_client||random_server (%d bytes)", len(signedData))
-	sig, err := signAndMarshal(priv, rand, signedData, algo)
+	wireSig, sig, err := signGMKexReply(rand, priv, signedData, algo)
 	if err != nil {
 		return nil, err
 	}
@@ -484,7 +508,7 @@ func (kex *gmt0129KEX) Server(c packetConn, rand io.Reader, magics *handshakeMag
 	if err := c.writePacket(Marshal(&gmKexReplyMsg{
 		Certificate:  certificate,
 		RandomServer: randomServer,
-		Signature:    sig,
+		Signature:    wireSig,
 	})); err != nil {
 		return nil, err
 	}

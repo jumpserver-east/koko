@@ -165,6 +165,7 @@ func NewSSHClientWithCfg(cfg *SSHClientOptions) (*SSHClient, error) {
 	gosshCfg := gossh.ClientConfig{
 		User:            cfg.Username,
 		Auth:            cfg.AuthMethods(),
+		ClientVersion:   "CSSH-1.0-JumpServer",
 		Timeout:         time.Duration(cfg.Timeout) * time.Second,
 		HostKeyCallback: gossh.InsecureIgnoreHostKey(),
 		Config:          createSSHConfig(),

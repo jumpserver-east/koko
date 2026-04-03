@@ -234,8 +234,9 @@ func main() {
 	}
 
 	config := &ssh.ClientConfig{
-		User: *user,
-		Auth: authMethods,
+		User:          *user,
+		Auth:          authMethods,
+		ClientVersion: "CSSH-1.0-JumpServer",
 		Config: ssh.Config{
 			KeyExchanges: []string{*kexAlgo},
 			Ciphers:      []string{*cipherAlgo},

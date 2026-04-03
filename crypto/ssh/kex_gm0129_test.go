@@ -159,6 +159,64 @@ func TestGMKexHashUsesCertificateBlob(t *testing.T) {
 	}
 }
 
+func TestEncryptGMKexSessionKeyUsesPlainCiphertext(t *testing.T) {
+	priv, err := sm2.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey(): %v", err)
+	}
+
+	sessionKey := []byte("01234567890123456789012345678901")
+	encK, err := encryptGMKexSessionKey(rand.Reader, &priv.PublicKey, sessionKey)
+	if err != nil {
+		t.Fatalf("encryptGMKexSessionKey(): %v", err)
+	}
+	if len(encK) == 0 {
+		t.Fatal("encryptGMKexSessionKey() returned empty ciphertext")
+	}
+	if encK[0] != 0x04 {
+		t.Fatalf("encryptGMKexSessionKey() prefix = 0x%02x, want 0x04 plain SM2 ciphertext", encK[0])
+	}
+
+	got, err := sm2.Decrypt(priv, encK)
+	if err != nil {
+		t.Fatalf("Decrypt(): %v", err)
+	}
+	if !bytes.Equal(got, sessionKey) {
+		t.Fatal("Decrypt() returned wrong session key")
+	}
+}
+
+func TestSignGMKexReplyUsesRawDEROnWire(t *testing.T) {
+	signer, algo := kexTestServerSigner(t, KeyExchangeSM2SM3)
+	signedData := []byte("gm-kex-reply-signature")
+
+	wireSig, marshaledSig, err := signGMKexReply(rand.Reader, signer, signedData, algo)
+	if err != nil {
+		t.Fatalf("signGMKexReply(): %v", err)
+	}
+	if len(wireSig) == 0 {
+		t.Fatal("signGMKexReply() returned empty wire signature")
+	}
+	if _, _, ok := parseSignatureBody(wireSig); ok {
+		t.Fatal("wire signature unexpectedly parsed as SSH signature blob")
+	}
+
+	sig, rest, ok := parseSignatureBody(marshaledSig)
+	if !ok || len(rest) != 0 {
+		t.Fatal("marshaled signature did not parse as SSH signature blob")
+	}
+	if sig.Format != KeyAlgoSM2 {
+		t.Fatalf("signature format = %q, want %q", sig.Format, KeyAlgoSM2)
+	}
+	if !bytes.Equal(sig.Blob, wireSig) {
+		t.Fatal("marshaled signature blob does not match wire DER signature")
+	}
+
+	if err := signer.PublicKey().Verify(signedData, sig); err != nil {
+		t.Fatalf("Verify(): %v", err)
+	}
+}
+
 func TestGMHostCertificateCallback(t *testing.T) {
 	a, b, err := netPipe()
 	if err != nil {
