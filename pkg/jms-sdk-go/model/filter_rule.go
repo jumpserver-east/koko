@@ -90,20 +90,22 @@ type CommandFilterItem struct {
 type CommandAction string
 
 const (
-	ActionReject  = "reject"
-	ActionAccept  = "accept"
-	ActionReview  = "review"
-	ActionWarning = "warning"
-	ActionUnknown = "Unknown"
+	ActionReject     = "reject"
+	ActionAccept     = "accept"
+	ActionReview     = "review"
+	ActionFaceReview = "face_review"
+	ActionWarning    = "warning"
+	ActionUnknown    = "Unknown"
 )
 
 var (
 	actionPriorityMap = map[CommandAction]int{
-		ActionReject:  0,
-		ActionReview:  1,
-		ActionWarning: 2,
-		ActionAccept:  3,
-		ActionUnknown: 4,
+		ActionReject:     0,
+		ActionReview:     1,
+		ActionFaceReview: 1,
+		ActionWarning:    2,
+		ActionAccept:     3,
+		ActionUnknown:    4,
 	}
 )
 

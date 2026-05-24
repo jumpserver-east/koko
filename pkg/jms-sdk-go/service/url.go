@@ -77,8 +77,9 @@ const (
 	AccountSecretURL          = "/api/v1/assets/account-secrets/%s/"
 	UserPermsAssetsURL        = "/api/v1/perms/users/%s/assets/"
 
-	AssetLoginConfirmURL = "/api/v1/acls/login-asset/check/"
-	AclCommandReviewURL  = "/api/v1/acls/command-filter-acls/command-review/"
+	AssetLoginConfirmURL    = "/api/v1/acls/login-asset/check/"
+	AclCommandReviewURL     = "/api/v1/acls/command-filter-acls/command-review/"
+	AclCommandFaceReviewURL = "/api/v1/acls/command-filter-acls/command-face-review/"
 )
 
 const (

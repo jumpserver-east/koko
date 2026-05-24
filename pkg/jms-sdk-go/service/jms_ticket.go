@@ -10,12 +10,22 @@ import (
 
 func (s *JMService) SubmitCommandReview(sid string, aclId string,
 	cmd string) (res model.CommandTicketInfo, err error) {
+	return s.submitCommandConfirm(AclCommandReviewURL, sid, aclId, cmd)
+}
+
+func (s *JMService) SubmitCommandFaceReview(sid string, aclId string,
+	cmd string) (res model.CommandTicketInfo, err error) {
+	return s.submitCommandConfirm(AclCommandFaceReviewURL, sid, aclId, cmd)
+}
+
+func (s *JMService) submitCommandConfirm(url string, sid string, aclId string,
+	cmd string) (res model.CommandTicketInfo, err error) {
 	data := map[string]string{
 		"session_id":        sid,
 		"cmd_filter_acl_id": aclId,
 		"run_command":       cmd,
 	}
-	_, err = s.authClient.Post(AclCommandReviewURL, data, &res)
+	_, err = s.authClient.Post(url, data, &res)
 	return
 }
 
