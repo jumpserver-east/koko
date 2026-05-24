@@ -373,7 +373,7 @@ func (s *Server) proxyAssetCommand(sess ssh.Session, sshClient *srvconn.SSHClien
 		acl := acls[i]
 		_, action, _ := acl.Match(rawStr)
 		switch action {
-		case model.ActionReview:
+		case model.ActionReview, model.ActionFaceReview:
 			msg := "SSH Command not support ACL review ticket"
 			utils.IgnoreErrWriteString(sess, msg)
 			logger.Errorf("SSH Command not support ACL review ticket `%s`", rawStr)

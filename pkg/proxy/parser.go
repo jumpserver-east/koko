@@ -331,7 +331,7 @@ func (p *Parser) parseInputState(b []byte) []byte {
 				p.setCurrentCmdFilterRule(rule)
 				p.forbiddenCommand(cmd)
 				return nil
-			case model.ActionReview:
+			case model.ActionReview, model.ActionFaceReview:
 				p.setCurrentCmdFilterRule(rule)
 				p.confirmStatus.SetStatus(StatusQuery)
 				p.confirmStatus.SetRule(rule)
@@ -362,7 +362,7 @@ func (p *Parser) parseInputState(b []byte) []byte {
 					p.setCurrentCmdStatusLevel(model.RejectLevel)
 					p.forbiddenCommand(cmd)
 					return nil
-				case model.ActionReview:
+				case model.ActionReview, model.ActionFaceReview:
 					p.setCurrentCmdFilterRule(rule)
 					p.confirmStatus.SetStatus(StatusQuery)
 					p.confirmStatus.SetRule(rule)
@@ -546,7 +546,7 @@ func (p *Parser) IsMatchCommandRule(command string) (CommandRule,
 		switch allowed {
 		case model.ActionAccept, model.ActionWarning:
 			return CommandRule{Acl: &rule, Item: &item}, cmd, true
-		case model.ActionReview, model.ActionReject:
+		case model.ActionReview, model.ActionFaceReview, model.ActionReject:
 			return CommandRule{Acl: &rule, Item: &item}, cmd, true
 		default:
 		}
@@ -562,7 +562,11 @@ type CommandRule struct {
 func (p *Parser) waitCommandConfirm() {
 	cmd := p.confirmStatus.Cmd
 	rule := p.confirmStatus.Rule
-	resp, err := p.jmsService.SubmitCommandReview(p.id, rule.Acl.ID, p.confirmStatus.Cmd)
+	submitFunc := p.jmsService.SubmitCommandReview
+	if rule.Acl.Action == model.ActionFaceReview {
+		submitFunc = p.jmsService.SubmitCommandFaceReview
+	}
+	resp, err := submitFunc(p.id, rule.Acl.ID, p.confirmStatus.Cmd)
 	if err != nil {
 		logger.Errorf("Session %s: submit command confirm api err: %s", p.id, err)
 		p.confirmStatus.SetAction(model.ActionReject)
