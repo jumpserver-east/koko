@@ -402,6 +402,7 @@ func (p *Parser) forbiddenCommand(cmd string) {
 	p.srvOutputChan <- []byte("\r\n" + fbdMsg)
 	p.output = fbdMsg
 	p.sendCommandToChan()
+	p.TerminalParser.ResetCommand()
 	p.userOutputChan <- p.breakInputPacket()
 }
 
@@ -639,6 +640,11 @@ func (p *Parser) sendCommandToChan() {
 	if p.command == "" {
 		return
 	}
+	switch p.getCurrentCmdStatusLevel() {
+	case model.RejectLevel, model.ReviewReject:
+		p.clearCommandRecord()
+		return
+	}
 	cmdFilterId := ""
 	cmdGroupId := ""
 	if rule := p.getCurrentCmdFilterRule(); rule.Acl != nil {
@@ -654,6 +660,10 @@ func (p *Parser) sendCommandToChan() {
 		CmdGroupId:     cmdGroupId,
 		User:           p.currentActiveUser,
 	}
+	p.clearCommandRecord()
+}
+
+func (p *Parser) clearCommandRecord() {
 	p.setCurrentCmdStatusLevel(model.NormalLevel)
 	p.resetCurrentCmdFilterRule()
 	p.command = ""

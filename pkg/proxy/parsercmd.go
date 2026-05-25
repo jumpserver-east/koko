@@ -102,6 +102,14 @@ func (s *TerminalParser) CheckSubScreen(b []byte) {
 func (s *TerminalParser) resetCommand() {
 	s.cmd = ""
 	s.commands = nil
+	s.InputBuf.Reset()
+	s.srvOutputBuf.Reset()
+}
+
+func (s *TerminalParser) ResetCommand() {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	s.resetCommand()
 }
 
 func (s *TerminalParser) GetCursorRow() string {
@@ -453,7 +461,7 @@ var passwordPromptRegexps = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\[sudo]\s*password\s*for\s+.*:`), // [sudo] password for user:
 	regexp.MustCompile(`(?i)enter\s+passphrase\s+for\s+.*:`), // SSH/GPG 私钥 passphrase
 	regexp.MustCompile(`(?i)passphrase\s+for\s+key\s+.*:`),   // git/ssh key 提示
-	regexp.MustCompile(`(?i)请输入密码[:：]?$`),               // 中文
+	regexp.MustCompile(`(?i)请输入密码[:：]?$`),                    // 中文
 	regexp.MustCompile(`(?i)mot de passe[:：]?$`),             // 法语
 	regexp.MustCompile(`(?i)contraseña[:：]?$`),               // 西班牙语
 	regexp.MustCompile(`(?i)senha[:：]?$`),                    // 葡萄牙语
