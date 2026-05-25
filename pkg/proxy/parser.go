@@ -293,6 +293,10 @@ func (p *Parser) parseInputState(b []byte) []byte {
 					statusMsg := utils.WrapperString(fmt.Sprintf(formatMsg, processor), utils.Red)
 					p.srvOutputChan <- []byte("\r\n")
 					p.srvOutputChan <- []byte(statusMsg)
+					if reason := p.confirmStatus.GetReason(); reason != "" {
+						p.srvOutputChan <- []byte("\r\n")
+						p.srvOutputChan <- []byte(utils.WrapperString(reason, utils.Red))
+					}
 					p.forbiddenCommand(p.confirmStatus.Cmd)
 				default:
 					// 默认是取消 不执行
@@ -569,6 +573,9 @@ func (p *Parser) waitCommandConfirm() {
 	resp, err := submitFunc(p.id, rule.Acl.ID, p.confirmStatus.Cmd)
 	if err != nil {
 		logger.Errorf("Session %s: submit command confirm api err: %s", p.id, err)
+		if rule.Acl.Action == model.ActionFaceReview {
+			p.confirmStatus.SetReason(err.Error())
+		}
 		p.confirmStatus.SetAction(model.ActionReject)
 		return
 	}

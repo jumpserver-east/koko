@@ -19,6 +19,25 @@ type AuthSign interface {
 	Sign(req *http.Request) error
 }
 
+type APIError struct {
+	Method     string
+	URL        string
+	StatusCode int
+	Code       string
+	Detail     string
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	if e.Detail != "" {
+		return e.Detail
+	}
+	if e.Code != "" {
+		return e.Code
+	}
+	return fmt.Sprintf("%s %s failed, get code: %d, %s", e.Method, e.URL, e.StatusCode, e.Body)
+}
+
 var debugDev = false
 
 func init() {
@@ -201,11 +220,59 @@ func (c *Client) Do(method, reqUrl string, data, res interface{}, params ...map[
 		}
 	}
 	if resp.StatusCode >= 400 {
-		msg := fmt.Sprintf("%s %s failed, get code: %d, %s", req.Method, req.URL, resp.StatusCode, body)
-		err = errors.New(msg)
+		err = newAPIError(req, resp.StatusCode, body)
 		return
 	}
 	return
+}
+
+func newAPIError(req *http.Request, statusCode int, body []byte) error {
+	apiErr := &APIError{
+		Method:     req.Method,
+		URL:        req.URL.String(),
+		StatusCode: statusCode,
+		Body:       string(body),
+	}
+	if len(body) == 0 {
+		return apiErr
+	}
+	var data map[string]interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return apiErr
+	}
+	if code, ok := data["code"].(string); ok {
+		apiErr.Code = code
+	}
+	apiErr.Detail = apiErrorMessage(data["detail"])
+	if apiErr.Detail == "" {
+		apiErr.Detail = apiErrorMessage(data["msg"])
+	}
+	return apiErr
+}
+
+func apiErrorMessage(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case []interface{}:
+		items := make([]string, 0, len(v))
+		for _, item := range v {
+			if msg := apiErrorMessage(item); msg != "" {
+				items = append(items, msg)
+			}
+		}
+		return strings.Join(items, "; ")
+	case map[string]interface{}:
+		items := make([]string, 0, len(v))
+		for key, item := range v {
+			if msg := apiErrorMessage(item); msg != "" {
+				items = append(items, fmt.Sprintf("%s: %s", key, msg))
+			}
+		}
+		return strings.Join(items, "; ")
+	default:
+		return ""
+	}
 }
 
 func (c *Client) Get(reqUrl string, res interface{}, params ...map[string]string) (resp *http.Response, err error) {
@@ -298,9 +365,7 @@ func (c *Client) handleResp(resp *http.Response, res interface{}) (err error) {
 	if resp.StatusCode >= 400 {
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(resp.Body)
-		msg := fmt.Sprintf("%s %s failed, get code: %d %s",
-			req.Method, req.URL, resp.StatusCode, buf.String())
-		err = errors.New(msg)
+		err = newAPIError(req, resp.StatusCode, buf.Bytes())
 		return
 	}
 	return nil

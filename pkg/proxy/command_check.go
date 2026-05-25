@@ -26,6 +26,7 @@ type commandConfirmStatus struct {
 
 	action    model.CommandAction
 	Processor string
+	Reason    string
 }
 
 func (c *commandConfirmStatus) SetStatus(status string) {
@@ -58,6 +59,18 @@ func (c *commandConfirmStatus) GetProcessor() string {
 	return c.Processor
 }
 
+func (c *commandConfirmStatus) SetReason(reason string) {
+	c.Lock()
+	defer c.Unlock()
+	c.Reason = reason
+}
+
+func (c *commandConfirmStatus) GetReason() string {
+	c.Lock()
+	defer c.Unlock()
+	return c.Reason
+}
+
 func (c *commandConfirmStatus) SetRule(rule CommandRule) {
 	c.Lock()
 	defer c.Unlock()
@@ -80,6 +93,7 @@ func (c *commandConfirmStatus) ResetCtx() {
 	c.Lock()
 	defer c.Unlock()
 	c.ctx, c.cancelFunc = context.WithCancel(context.Background())
+	c.Reason = ""
 }
 
 func (c *commandConfirmStatus) InRunning() bool {
