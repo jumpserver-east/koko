@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"github.com/jumpserver/koko/pkg/config"
 	"github.com/jumpserver/koko/pkg/exchange"
 	"github.com/jumpserver/koko/pkg/i18n"
+	"github.com/jumpserver/koko/pkg/jms-sdk-go/httplib"
 	"github.com/jumpserver/koko/pkg/jms-sdk-go/model"
 	"github.com/jumpserver/koko/pkg/jms-sdk-go/service"
 	"github.com/jumpserver/koko/pkg/logger"
@@ -574,7 +576,7 @@ func (p *Parser) waitCommandConfirm() {
 	if err != nil {
 		logger.Errorf("Session %s: submit command confirm api err: %s", p.id, err)
 		if rule.Acl.Action == model.ActionFaceReview {
-			p.confirmStatus.SetReason(err.Error())
+			p.confirmStatus.SetReason(getCommandFaceReviewErrorMessage(err))
 		}
 		p.confirmStatus.SetAction(model.ActionReject)
 		return
@@ -662,6 +664,75 @@ func (p *Parser) waitCommandConfirm() {
 			logger.Errorf("Receive unknown command confirm status %s", statusResp.Status)
 		}
 	}
+}
+
+func getCommandFaceReviewErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	var apiErr *httplib.APIError
+	if errors.As(err, &apiErr) {
+		if msg := commandFaceReviewMessageByDetail(apiErr.Detail); msg != "" {
+			return msg
+		}
+		if msg := commandFaceReviewMessageByCode(apiErr.Code); msg != "" {
+			return msg
+		}
+	}
+	return "人脸核验失败：Core 或外部人脸核验服务异常"
+}
+
+func commandFaceReviewMessageByCode(code string) string {
+	switch code {
+	case "face_verify_id_number_invalid":
+		return "人脸核验失败：获取用户身份证号失败"
+	case "face_verify_token_failed":
+		return "人脸核验失败：获取拍照系统 token 失败"
+	case "face_verify_camera_failed":
+		return "人脸核验失败：调用拍照系统失败"
+	case "face_verify_photo_timeout":
+		return "人脸核验失败：等待拍照系统回调超时"
+	case "face_verify_compare_failed":
+		return "人脸核验失败：人脸比对服务配置缺失或调用异常"
+	case "face_verify_rejected":
+		return "人脸核验失败：人脸比对不通过"
+	default:
+		return ""
+	}
+}
+
+func commandFaceReviewMessageByDetail(detail string) string {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return ""
+	}
+	if isFaceCompareRejectedDetail(detail) && strings.Contains(detail, "连续失败") {
+		return strings.ReplaceAll(detail, "AI 人脸比对", "人脸比对")
+	}
+	markers := []struct {
+		keyword string
+		message string
+	}{
+		{"获取用户身份证号失败", "人脸核验失败：获取用户身份证号失败"},
+		{"获取拍照系统 token 失败", "人脸核验失败：获取拍照系统 token 失败"},
+		{"调用拍照系统失败", "人脸核验失败：调用拍照系统失败"},
+		{"等待拍照系统回调超时", "人脸核验失败：等待拍照系统回调超时"},
+		{"拍照系统未返回用户人脸信息", "人脸核验失败：拍照系统未返回用户人脸信息"},
+		{"人脸比对不通过", "人脸核验失败：人脸比对不通过"},
+		{"AI 人脸比对不通过", "人脸核验失败：人脸比对不通过"},
+		{"AI 人脸平台", "人脸核验失败：人脸比对服务配置缺失或调用异常"},
+		{"图片", "人脸核验失败：拍照系统回调图片异常"},
+	}
+	for _, marker := range markers {
+		if strings.Contains(detail, marker.keyword) {
+			return marker.message
+		}
+	}
+	return ""
+}
+
+func isFaceCompareRejectedDetail(detail string) bool {
+	return strings.Contains(detail, "人脸比对不通过") || strings.Contains(detail, "AI 人脸比对不通过")
 }
 
 func (p *Parser) IsInZmodemRecvState() bool {
