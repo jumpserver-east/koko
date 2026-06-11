@@ -65,6 +65,12 @@ func (c *commandConfirmStatus) SetRule(rule CommandRule) {
 	c.Rule = rule
 }
 
+func (c *commandConfirmStatus) GetRule() CommandRule {
+	c.Lock()
+	defer c.Unlock()
+	return c.Rule
+}
+
 func (c *commandConfirmStatus) SetData(data string) {
 	c.Lock()
 	defer c.Unlock()

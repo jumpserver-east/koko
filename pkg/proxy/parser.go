@@ -325,6 +325,7 @@ func (p *Parser) parseInputState(b []byte) []byte {
 					p.userOutputChan <- []byte(p.confirmStatus.data)
 				case model.ActionReject:
 					p.setCurrentCmdStatusLevel(model.ReviewReject)
+					p.setCurrentCmdFilterRule(p.confirmStatus.GetRule())
 					formatMsg := lang.T("%s rejected")
 					statusMsg := utils.WrapperString(fmt.Sprintf(formatMsg, processor), utils.Red)
 					p.srvOutputChan <- []byte("\r\n")
@@ -397,13 +398,26 @@ func (p *Parser) IsNeedParse() bool {
 }
 
 func (p *Parser) forbiddenCommand(cmd string) {
-	lang := i18n.NewLang(p.i18nLang)
-	fbdMsg := utils.WrapperWarn(fmt.Sprintf(lang.T("Command `%s` is forbidden"), cmd))
+	fbdMsg := p.forbiddenCommandMessage(cmd)
 	p.srvOutputChan <- []byte("\r\n" + fbdMsg)
 	p.output = fbdMsg
 	p.sendCommandToChan()
 	p.TerminalParser.ResetCommand()
 	p.userOutputChan <- p.breakInputPacket()
+}
+
+func (p *Parser) forbiddenCommandMessage(cmd string) string {
+	rule := p.getCurrentCmdFilterRule()
+	if rule.Acl == nil {
+		lang := i18n.NewLang(p.i18nLang)
+		return utils.WrapperWarn(fmt.Sprintf(lang.T("Command `%s` is forbidden"), cmd))
+	}
+	cmdFilterName := rule.Acl.Name
+	cmdGroupName := ""
+	if rule.Item != nil {
+		cmdGroupName = rule.Item.Name
+	}
+	return utils.WrapperWarn(rejectedCommandDisplay(cmdFilterName, cmdGroupName))
 }
 
 // ParseUserInput 解析用户的输入
@@ -640,27 +654,49 @@ func (p *Parser) sendCommandToChan() {
 	if p.command == "" {
 		return
 	}
-	switch p.getCurrentCmdStatusLevel() {
-	case model.RejectLevel, model.ReviewReject:
-		p.clearCommandRecord()
-		return
-	}
 	cmdFilterId := ""
 	cmdGroupId := ""
+	cmdFilterName := ""
+	cmdGroupName := ""
 	if rule := p.getCurrentCmdFilterRule(); rule.Acl != nil {
 		cmdFilterId = rule.Acl.ID
-		cmdGroupId = rule.Item.ID
+		cmdFilterName = rule.Acl.Name
+		if rule.Item != nil {
+			cmdGroupId = rule.Item.ID
+			cmdGroupName = rule.Item.Name
+		}
+	}
+	riskLevel := p.getCurrentCmdStatusLevel()
+	command := p.command
+	output := p.output
+	switch riskLevel {
+	case model.RejectLevel, model.ReviewReject:
+		command = rejectedCommandDisplay(cmdFilterName, cmdGroupName)
+		output = ""
 	}
 	p.cmdRecordChan <- &ExecutedCommand{
-		Command:        p.command,
-		Output:         p.output,
+		Command:        command,
+		Output:         output,
 		CreatedDate:    p.cmdCreateDate,
-		RiskLevel:      p.getCurrentCmdStatusLevel(),
+		RiskLevel:      riskLevel,
 		CmdFilterACLId: cmdFilterId,
 		CmdGroupId:     cmdGroupId,
 		User:           p.currentActiveUser,
 	}
 	p.clearCommandRecord()
+}
+
+func rejectedCommandDisplay(ruleName, groupName string) string {
+	switch {
+	case ruleName != "" && groupName != "":
+		return fmt.Sprintf("[Command rejected by rule: %s/%s]", ruleName, groupName)
+	case ruleName != "":
+		return fmt.Sprintf("[Command rejected by rule: %s]", ruleName)
+	case groupName != "":
+		return fmt.Sprintf("[Command rejected by rule: %s]", groupName)
+	default:
+		return "[Command rejected by rule]"
+	}
 }
 
 func (p *Parser) clearCommandRecord() {
