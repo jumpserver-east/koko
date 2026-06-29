@@ -126,7 +126,7 @@ func main() {
 			ssh.KeyAlgoRSASHA512,
 		},
 		MaxAuthTries:     6,
-		ServerVersion:    "SSH-2.0-GMSSHD_1.0",
+		ServerVersion:    "CSSH-1.0-JumpServer",
 		PasswordCallback: makePasswordCallback(*user, *password),
 	}
 

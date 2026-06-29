@@ -51,7 +51,7 @@ const (
 	colorBold   = "\033[1m"
 	colorDim    = "\033[2m"
 
-	sshClientVersion = "SSH-2.0-CSSH-1.0-JumpServer"
+	sshClientVersion = "CSSH-1.0-JumpServer"
 )
 
 var verbosity int
