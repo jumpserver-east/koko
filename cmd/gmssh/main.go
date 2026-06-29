@@ -56,11 +56,6 @@ const (
 
 var verbosity int
 
-type clientDialAttempt struct {
-	label  string
-	config *ssh.ClientConfig
-}
-
 func logStep(step int, msg string) {
 	fmt.Printf("%s[Step %d]%s %s%s%s\n", colorCyan, step, colorReset, colorBold, msg, colorReset)
 }
@@ -166,10 +161,8 @@ func main() {
 	logStep(step, "Preparing authentication method")
 
 	var (
-		gmAuthMethods      []ssh.AuthMethod
-		classicAuthMethods []ssh.AuthMethod
-		signer             ssh.Signer
-		authDesc           []string
+		gmAuthMethods []ssh.AuthMethod
+		authDesc      []string
 	)
 
 	if *keyFile != "" {
@@ -177,43 +170,27 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to read key file %s: %v", *keyFile, err)
 		}
-		signer, err = ssh.ParsePrivateKey(keyData)
+		signer, err := ssh.ParsePrivateKey(keyData)
 		if err != nil {
 			log.Fatalf("Failed to parse SM2 private key: %v", err)
 		}
+		if signer.PublicKey().Type() != ssh.KeyAlgoSM2 {
+			log.Fatalf("SM2 private key required for GM/T 0129 public key auth, got %s", signer.PublicKey().Type())
+		}
 		logOK(fmt.Sprintf("Loaded SM2 private key from: %s", *keyFile))
 		logInfo(fmt.Sprintf("Public key fingerprint: %s", fingerprint(signer.PublicKey())))
-		classicAuthMethods = append(classicAuthMethods, ssh.PublicKeys(signer))
-		if signer.PublicKey().Type() == ssh.KeyAlgoSM2 {
-			gmAuthMethods = append(gmAuthMethods, ssh.GMPublicKeys(signer))
-			authDesc = append(authDesc, fmt.Sprintf("GM/T 0129 PublicKey (SM2, file: %s)", *keyFile))
-		} else {
-			authDesc = append(authDesc, fmt.Sprintf("Classic PublicKey (%s, file: %s)", signer.PublicKey().Type(), *keyFile))
-			logInfo(fmt.Sprintf("Key type %s is classic-only; GM publickey attempt skipped", signer.PublicKey().Type()))
-		}
+		gmAuthMethods = append(gmAuthMethods, ssh.GMPublicKeys(signer))
+		authDesc = append(authDesc, fmt.Sprintf("GM/T 0129 PublicKey (SM2, file: %s)", *keyFile))
 	}
 
 	if *password != "" {
 		gmAuthMethods = append(gmAuthMethods, ssh.GMPassword(*password))
-		classicAuthMethods = append(classicAuthMethods,
-			ssh.Password(*password),
-			ssh.KeyboardInteractive(func(user, instruction string, questions []string, echos []bool) ([]string, error) {
-				if len(questions) == 0 {
-					return []string{}, nil
-				}
-				answers := make([]string, len(questions))
-				for i := range answers {
-					answers[i] = *password
-				}
-				return answers, nil
-			}),
-		)
 		authDesc = append(authDesc, "GM/T 0129 Password (SM3 challenge-response)")
 		logOK("Configured GM/T 0129 password authentication")
 		logInfo("Password mode: strict (no plaintext password field)")
 	}
 
-	if len(gmAuthMethods) == 0 && len(classicAuthMethods) == 0 {
+	if len(gmAuthMethods) == 0 {
 		logErr("No usable authentication method after config parsing")
 		os.Exit(1)
 	}
@@ -221,23 +198,35 @@ func main() {
 	if len(authDesc) > 0 {
 		logInfo(fmt.Sprintf("Auth strategy: %s", strings.Join(authDesc, " + ")))
 	}
-	if len(gmAuthMethods) > 0 {
-		logInfo("Negotiation mode: GM first, classic SSH fallback on handshake/auth failure")
-	} else {
-		logInfo("Negotiation mode: classic SSH only")
-	}
+	logInfo("Negotiation mode: GM/T 0129 only")
 
 	// --- Step 2: Configure algorithms ---
 	step++
 	logStep(step, "Configuring cryptographic algorithms")
-	kexAlgos := buildKexAlgorithms(*kexAlgo)
-	cipherAlgos := buildCipherAlgorithms(*cipherAlgo)
-	macAlgos := buildMACAlgorithms(*macAlgo)
-	hostKeyAlgos := buildHostKeyAlgorithms(*hostKeyAlgo)
-	logInfo(fmt.Sprintf("KEX:     %s (fallbacks enabled)", kexAlgos[0]))
-	logInfo(fmt.Sprintf("Cipher:  %s (fallbacks enabled)", cipherAlgos[0]))
-	logInfo(fmt.Sprintf("MAC:     %s (fallbacks enabled)", macAlgos[0]))
-	logInfo(fmt.Sprintf("HostKey: %s (fallbacks enabled)", hostKeyAlgos[0]))
+	kexAlgos, err := buildKexAlgorithms(*kexAlgo)
+	if err != nil {
+		logErr(err.Error())
+		os.Exit(1)
+	}
+	cipherAlgos, err := buildCipherAlgorithms(*cipherAlgo)
+	if err != nil {
+		logErr(err.Error())
+		os.Exit(1)
+	}
+	macAlgos, err := buildMACAlgorithms(*macAlgo)
+	if err != nil {
+		logErr(err.Error())
+		os.Exit(1)
+	}
+	hostKeyAlgos, err := buildHostKeyAlgorithms(*hostKeyAlgo)
+	if err != nil {
+		logErr(err.Error())
+		os.Exit(1)
+	}
+	logInfo(fmt.Sprintf("KEX:     %s", strings.Join(kexAlgos, ", ")))
+	logInfo(fmt.Sprintf("Cipher:  %s", strings.Join(cipherAlgos, ", ")))
+	logInfo(fmt.Sprintf("MAC:     %s", strings.Join(macAlgos, ", ")))
+	logInfo(fmt.Sprintf("HostKey: %s", strings.Join(hostKeyAlgos, ", ")))
 	if *hostCertCA != "" {
 		logInfo(fmt.Sprintf("HostCert CA: %s", *hostCertCA))
 	}
@@ -276,6 +265,9 @@ func main() {
 	}
 
 	hostKeyCallback := func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+		if key.Type() != ssh.KeyAlgoSM2 {
+			return fmt.Errorf("non-SM2 host key rejected: %s", key.Type())
+		}
 		logOK(fmt.Sprintf("Host key type:        %s", key.Type()))
 		logOK(fmt.Sprintf("Host key fingerprint: %s", fingerprint(key)))
 		return nil // Accept all host keys for testing
@@ -287,36 +279,22 @@ func main() {
 		return nil
 	}
 
-	attempts := make([]clientDialAttempt, 0, 2)
-	if len(gmAuthMethods) > 0 {
-		attempts = append(attempts, clientDialAttempt{
-			label: "gm",
-			config: buildClientConfig(*user, gmAuthMethods, *timeout, kexAlgos, cipherAlgos, macAlgos, hostKeyAlgos,
-				gmHostCertificateCallback, hostKeyCallback, bannerCallback),
-		})
-	}
-	if len(classicAuthMethods) > 0 {
-		attempts = append(attempts, clientDialAttempt{
-			label: "classic",
-			config: buildClientConfig(*user, classicAuthMethods, *timeout, kexAlgos, cipherAlgos, macAlgos, hostKeyAlgos,
-				gmHostCertificateCallback, hostKeyCallback, bannerCallback),
-		})
-	}
-
+	clientConfig := buildClientConfig(*user, gmAuthMethods, *timeout, kexAlgos, cipherAlgos, macAlgos, hostKeyAlgos,
+		gmHostCertificateCallback, hostKeyCallback, bannerCallback)
 	logOK("ClientConfig built successfully")
 
-	// --- Step 3: TCP connect + SSH handshake (with fallback) ---
+	// --- Step 3: TCP connect + SSH handshake ---
 	step++
 	logStep(step, fmt.Sprintf("Connecting to %s", addr))
 	logInfo(fmt.Sprintf("User: %s", *user))
-	selectedAttempt, sshConn, chans, reqs, err := dialClientConnWithFallback(addr, *timeout, attempts)
+	sshConn, chans, reqs, err := dialClientConn(addr, *timeout, clientConfig)
 	if err != nil {
 		logErr(fmt.Sprintf("SSH handshake failed: %v", err))
 		os.Exit(1)
 	}
 	defer sshConn.Close()
 
-	logOK(fmt.Sprintf("Negotiation path: %s", strings.ToUpper(selectedAttempt)))
+	logOK("Negotiation path: GM")
 	logOK(fmt.Sprintf("Session ID: %s", hex.EncodeToString(sshConn.SessionID())))
 	logOK(fmt.Sprintf("Server version: %s", string(sshConn.ServerVersion())))
 	logOK(fmt.Sprintf("Client version: %s", string(sshConn.ClientVersion())))
@@ -359,61 +337,45 @@ func buildClientConfig(
 	}
 }
 
-func dialClientConnWithFallback(addr string, timeout time.Duration, attempts []clientDialAttempt) (string, ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
-	var lastErr error
-	for i, attempt := range attempts {
-		logInfo(fmt.Sprintf("Attempt %d/%d: %s", i+1, len(attempts), strings.ToUpper(attempt.label)))
-
-		connectStart := time.Now()
-		conn, err := net.DialTimeout("tcp", addr, timeout)
-		if err != nil {
-			return "", nil, nil, nil, err
-		}
-		logOK(fmt.Sprintf("TCP connected in %v", time.Since(connectStart).Round(time.Millisecond)))
-
-		handshakeStart := time.Now()
-		sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, attempt.config)
-		if err == nil {
-			logOK(fmt.Sprintf("SSH handshake completed in %v", time.Since(handshakeStart).Round(time.Millisecond)))
-			return attempt.label, sshConn, chans, reqs, nil
-		}
-
-		lastErr = err
-		_ = conn.Close()
-		logErr(fmt.Sprintf("%s handshake failed: %v", strings.ToUpper(attempt.label), err))
-		if i+1 < len(attempts) {
-			logInfo(fmt.Sprintf("Retrying with %s mode", strings.ToUpper(attempts[i+1].label)))
-		}
+func dialClientConn(addr string, timeout time.Duration, config *ssh.ClientConfig) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
+	connectStart := time.Now()
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	return "", nil, nil, nil, lastErr
+	logOK(fmt.Sprintf("TCP connected in %v", time.Since(connectStart).Round(time.Millisecond)))
+
+	handshakeStart := time.Now()
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	if err != nil {
+		_ = conn.Close()
+		return nil, nil, nil, err
+	}
+	logOK(fmt.Sprintf("SSH handshake completed in %v", time.Since(handshakeStart).Round(time.Millisecond)))
+	return sshConn, chans, reqs, nil
 }
 
-func buildKexAlgorithms(preferred string) []string {
-	algos := ssh.SupportedAlgorithms()
-	insecure := ssh.InsecureAlgorithms()
-	kexAlgos := appendUniqueStrings(nil, preferred, ssh.KeyExchangeSM2SM3)
-	return appendUniqueStrings(kexAlgos, append(insecure.KeyExchanges, algos.KeyExchanges...)...)
+func buildKexAlgorithms(preferred string) ([]string, error) {
+	return buildGMAlgorithms(preferred, []string{ssh.KeyExchangeSM2SM3}, "key exchange")
 }
 
-func buildCipherAlgorithms(preferred string) []string {
-	algos := ssh.SupportedAlgorithms()
-	insecure := ssh.InsecureAlgorithms()
-	cipherAlgos := appendUniqueStrings(nil, preferred, ssh.CipherSM4GCM, ssh.CipherSM4CTR, ssh.CipherSM4CBC, ssh.CipherAES128CTR)
-	return appendUniqueStrings(cipherAlgos, append(insecure.Ciphers, algos.Ciphers...)...)
+func buildCipherAlgorithms(preferred string) ([]string, error) {
+	return buildGMAlgorithms(preferred, []string{ssh.CipherSM4GCM, ssh.CipherSM4CTR, ssh.CipherSM4CBC}, "cipher")
 }
 
-func buildMACAlgorithms(preferred string) []string {
-	algos := ssh.SupportedAlgorithms()
-	insecure := ssh.InsecureAlgorithms()
-	macAlgos := appendUniqueStrings(nil, preferred, ssh.HMACSM3, ssh.CBCMAC)
-	return appendUniqueStrings(macAlgos, append(insecure.MACs, algos.MACs...)...)
+func buildMACAlgorithms(preferred string) ([]string, error) {
+	return buildGMAlgorithms(preferred, []string{ssh.HMACSM3, ssh.CBCMAC}, "MAC")
 }
 
-func buildHostKeyAlgorithms(preferred string) []string {
-	algos := ssh.SupportedAlgorithms()
-	insecure := ssh.InsecureAlgorithms()
-	hostKeyAlgos := appendUniqueStrings(nil, preferred, ssh.KeyAlgoSM2, ssh.KeyAlgoED25519)
-	return appendUniqueStrings(hostKeyAlgos, append(algos.HostKeys, insecure.HostKeys...)...)
+func buildHostKeyAlgorithms(preferred string) ([]string, error) {
+	return buildGMAlgorithms(preferred, []string{ssh.KeyAlgoSM2}, "host key")
+}
+
+func buildGMAlgorithms(preferred string, allowed []string, label string) ([]string, error) {
+	if preferred != "" && !containsString(allowed, preferred) {
+		return nil, fmt.Errorf("unsupported non-GM %s algorithm %q; allowed: %s", label, preferred, strings.Join(allowed, ", "))
+	}
+	return appendUniqueStrings(nil, append([]string{preferred}, allowed...)...), nil
 }
 
 func appendUniqueStrings(dst []string, values ...string) []string {

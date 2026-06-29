@@ -114,16 +114,12 @@ func main() {
 	// --- Configure server ---
 	config := &ssh.ServerConfig{
 		Config: ssh.Config{
-			Ciphers:      []string{"sm4-gcm", "sm4-ctr", "sm4-cbc", "aes128-ctr", "aes192-ctr", "aes256-ctr", "aes128-gcm@openssh.com"},
-			KeyExchanges: []string{"sm2-sm3", "curve25519-sha256", "curve25519-sha256@libssh.org", "ecdh-sha2-nistp256"},
-			MACs:         []string{"hmac-sm3", "cbc-mac", "hmac-sha2-256-etm@openssh.com", "hmac-sha2-256"},
+			Ciphers:      []string{ssh.CipherSM4GCM, ssh.CipherSM4CTR, ssh.CipherSM4CBC},
+			KeyExchanges: []string{ssh.KeyExchangeSM2SM3},
+			MACs:         []string{ssh.HMACSM3, ssh.CBCMAC},
 		},
 		PublicKeyAuthAlgorithms: []string{
 			ssh.KeyAlgoSM2,
-			ssh.KeyAlgoED25519,
-			ssh.KeyAlgoECDSA256,
-			ssh.KeyAlgoRSASHA256,
-			ssh.KeyAlgoRSASHA512,
 		},
 		MaxAuthTries:     6,
 		ServerVersion:    "CSSH-1.0-JumpServer",
