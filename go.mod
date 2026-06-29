@@ -12,6 +12,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/elastic/go-elasticsearch/v6 v6.8.5
 	github.com/elastic/go-elasticsearch/v8 v8.14.0
+	github.com/emmansun/gmsm v0.41.0
 	github.com/gin-gonic/gin v1.10.1
 	github.com/gliderlabs/ssh v0.3.3
 	github.com/google/uuid v1.6.0
@@ -56,7 +57,6 @@ require (
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/elastic/elastic-transport-go/v8 v8.6.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.12.2 // indirect
-	github.com/emmansun/gmsm v0.41.0 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.9 // indirect

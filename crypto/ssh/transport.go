@@ -351,10 +351,13 @@ func readVersion(r io.Reader) ([]byte, error) {
 		// The RFC says that the version should be terminated with \r\n
 		// but several SSH servers actually only send a \n.
 		if buf[0] == '\n' {
-			if !bytes.HasPrefix(versionString, []byte("SSH-")) {
-				// RFC 4253 says we need to ignore all version string lines
-				// except the one containing the SSH version (provided that
-				// all the lines do not exceed 255 bytes in total).
+			// RFC 4253 says we need to ignore all version string lines
+			// except the one containing the SSH version (provided that
+			// all the lines do not exceed 255 bytes in total).
+			// GM/T 0129-2023 (CSSH) uses a "CSSH-" version banner instead
+			// of the standard "SSH-" prefix, so accept both.
+			if !bytes.HasPrefix(versionString, []byte("SSH-")) &&
+				!bytes.HasPrefix(versionString, []byte("CSSH-")) {
 				versionString = versionString[:0]
 				continue
 			}
