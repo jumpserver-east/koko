@@ -65,7 +65,7 @@ func main() {
 
 	// server flags
 	host := flag.String("host", "0.0.0.0", "Listen host")
-	port := flag.String("port", "2222", "Listen port")
+	port := flag.String("port", "3333", "Listen port")
 	user := flag.String("user", "admin", "Allowed username")
 	password := flag.String("password", "admin", "Allowed password (for GM/T 0129 password auth)")
 	authorizedKeys := flag.String("authorized-keys", "", "Path to authorized_keys file (for SM2 public key auth)")
@@ -114,9 +114,10 @@ func main() {
 	// --- Configure server ---
 	config := &ssh.ServerConfig{
 		Config: ssh.Config{
-			Ciphers:      []string{ssh.CipherSM4GCM, ssh.CipherSM4CTR, ssh.CipherSM4CBC},
-			KeyExchanges: []string{ssh.KeyExchangeSM2SM3},
-			MACs:         []string{ssh.HMACSM3, ssh.CBCMAC},
+			Ciphers:                  []string{ssh.CipherSM4GCM, ssh.CipherSM4CTR, ssh.CipherSM4CBC},
+			KeyExchanges:             []string{ssh.KeyExchangeSM2SM3},
+			MACs:                     []string{ssh.HMACSM3, ssh.CBCMAC},
+			OmitOpenSSHKexExtensions: true,
 		},
 		PublicKeyAuthAlgorithms: []string{
 			ssh.KeyAlgoSM2,

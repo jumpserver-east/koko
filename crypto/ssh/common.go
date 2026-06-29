@@ -553,6 +553,19 @@ type Config struct {
 	// The allowed MAC algorithms. If unspecified then a sensible default is
 	// used. Unsupported values are silently ignored.
 	MACs []string
+
+	// OmitOpenSSHKexExtensions, when true, suppresses the OpenSSH key-exchange
+	// extension markers that this library otherwise injects into SSH_MSG_KEXINIT:
+	// the strict KEX markers (kex-strict-c-v00@openssh.com /
+	// kex-strict-s-v00@openssh.com) and the client ext-info marker (ext-info-c).
+	// The peer's markers are likewise ignored, so strict KEX mode is never
+	// entered.
+	//
+	// This is intended for GM/T 0129-2023 (国密 SSH) conformance testing, where
+	// the SSH_MSG_KEXINIT name-lists must contain only national-cryptography
+	// algorithm strings. Enabling it disables the Terrapin attack mitigation
+	// (CVE-2023-48795); leave it false (the default) for production use.
+	OmitOpenSSHKexExtensions bool
 }
 
 // SetDefaults sets sensible values for unset fields in config. This is

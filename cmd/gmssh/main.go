@@ -325,9 +325,10 @@ func buildClientConfig(
 		Auth:          authMethods,
 		ClientVersion: sshClientVersion,
 		Config: ssh.Config{
-			KeyExchanges: kexAlgos,
-			Ciphers:      cipherAlgos,
-			MACs:         macAlgos,
+			KeyExchanges:             kexAlgos,
+			Ciphers:                  cipherAlgos,
+			MACs:                     macAlgos,
+			OmitOpenSSHKexExtensions: true,
 		},
 		HostKeyAlgorithms:         hostKeyAlgos,
 		GMHostCertificateCallback: gmHostCertificateCallback,

@@ -544,7 +544,10 @@ func (t *handshakeTransport) sendKexInit() error {
 			}
 		}
 
-		if t.sessionID == nil {
+		// The strict KEX marker is an OpenSSH extension, not a national
+		// cryptography algorithm. Skip it when OmitOpenSSHKexExtensions is set
+		// so the KEXINIT name-list stays pure (GM/T 0129 conformance testing).
+		if t.sessionID == nil && !t.config.OmitOpenSSHKexExtensions {
 			msg.KexAlgos = append(msg.KexAlgos, kexStrictServer)
 		}
 	} else {
@@ -556,7 +559,11 @@ func (t *handshakeTransport) sendKexInit() error {
 		//
 		// We also send the strict KEX mode extension algorithm, in order to opt
 		// into the strict KEX mode.
-		if firstKeyExchange := t.sessionID == nil; firstKeyExchange {
+		//
+		// Both ext-info-c and the strict KEX marker are OpenSSH extensions
+		// rather than national cryptography algorithms, so they are suppressed
+		// when OmitOpenSSHKexExtensions is set.
+		if firstKeyExchange := t.sessionID == nil; firstKeyExchange && !t.config.OmitOpenSSHKexExtensions {
 			msg.KexAlgos = append(msg.KexAlgos, "ext-info-c")
 			msg.KexAlgos = append(msg.KexAlgos, kexStrictClient)
 		}
@@ -715,7 +722,8 @@ func (t *handshakeTransport) enterKeyExchange(otherInitPacket []byte) error {
 	debugf(debugLevel1, "kex: client->server cipher: %s MAC: %s", t.algorithms.Write.Cipher, t.algorithms.Write.MAC)
 	debugf(debugLevel1, "kex: server->client cipher: %s MAC: %s", t.algorithms.Read.Cipher, t.algorithms.Read.MAC)
 
-	if t.sessionID == nil && ((isClient && slices.Contains(serverInit.KexAlgos, kexStrictServer)) || (!isClient && slices.Contains(clientInit.KexAlgos, kexStrictClient))) {
+	if t.sessionID == nil && !t.config.OmitOpenSSHKexExtensions &&
+		((isClient && slices.Contains(serverInit.KexAlgos, kexStrictServer)) || (!isClient && slices.Contains(clientInit.KexAlgos, kexStrictClient))) {
 		t.strictMode = true
 		if err := t.conn.setStrictMode(); err != nil {
 			return err
