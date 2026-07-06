@@ -375,7 +375,7 @@ func (p *Parser) parseInputState(b []byte) []byte {
 				p.confirmStatus.SetCmd(p.command)
 				p.confirmStatus.SetData(string(b))
 				p.confirmStatus.ResetCtx()
-				confirmMsg := fmt.Sprintf(waitMsg, stripNewLine(p.confirmStatus.Cmd))
+				confirmMsg := formatCommandConfirmMsg(waitMsg, p.confirmStatus.Cmd)
 				p.srvOutputChan <- []byte("\r\n" + confirmMsg)
 				return nil
 			case model.ActionWarning:
@@ -401,6 +401,13 @@ func (p *Parser) IsNeedParse() bool {
 		return false
 	}
 	return true
+}
+
+func formatCommandConfirmMsg(format, cmd string) string {
+	if strings.Contains(format, "%s") {
+		return fmt.Sprintf(format, stripNewLine(cmd))
+	}
+	return format
 }
 
 func (p *Parser) forbiddenCommand(cmd string) {
