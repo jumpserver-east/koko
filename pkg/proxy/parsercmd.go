@@ -67,7 +67,7 @@ type TerminalParser struct {
 
 	EmitCommands func(cmd, out string)
 
-	Screen     *terminalparser.TerminalParser
+	Screen     *terminalparser.Screen
 	tmuxParser *terminalparser.TmuxParser
 	isSubMode  bool
 
@@ -115,7 +115,7 @@ func (s *TerminalParser) ResetCommand() {
 func (s *TerminalParser) GetCursorRow() string {
 	switch s.screenType {
 	case LinuxScreen:
-		row := s.Screen.TScreen.GetCursorRow()
+		row := s.Screen.GetCursorRow()
 		return row.String()
 	case MongoScreen:
 		row := s.mongoScreenParser.TmuxScreen.GetCursorRow()
@@ -124,7 +124,7 @@ func (s *TerminalParser) GetCursorRow() string {
 		row := s.tmuxParser.TmuxScreen.GetCursorRow()
 		return row.String()
 	default:
-		row := s.Screen.TScreen.GetCursorRow()
+		row := s.Screen.GetCursorRow()
 		return row.String()
 	}
 }
@@ -352,7 +352,7 @@ func (s *TerminalParser) GetPs1() string {
 func (s *TerminalParser) FindCommands(cmds []string, startCmd string) {
 	// 从最后一行开始往前查询命令
 	outputs := make([]string, 0, 10)
-	rows := s.Screen.TScreen.Rows.Values()
+	rows := s.Screen.Rows
 	j := len(rows) - 1
 
 	// 去除 startCMd的干扰
@@ -401,7 +401,7 @@ func (s *TerminalParser) FindCommands(cmds []string, startCmd string) {
 }
 
 func (s *TerminalParser) CurrentRowHasPs1() bool {
-	row := s.Screen.TScreen.GetCursorRow()
+	row := s.Screen.GetCursorRow()
 	rowStr := row.String()
 	return strings.Contains(rowStr, s.Ps1sStr)
 }

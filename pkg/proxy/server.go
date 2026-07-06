@@ -247,7 +247,8 @@ func (s *Server) GetFilterParser() *Parser {
 		i18nLang:       s.connOpts.i18nLang,
 		platform:       &platform,
 	}
-	parser.initial()
+	pty := s.UserConn.Pty()
+	parser.initial(pty.Window.Width, pty.Window.Height)
 	return &parser
 }
 

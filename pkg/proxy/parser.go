@@ -120,7 +120,13 @@ func (p *Parser) resetCurrentCmdFilterRule() {
 	p.currentCmdFilterRule = CommandRule{}
 }
 
-func (p *Parser) initial() {
+func (p *Parser) initial(w, h int) {
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 24
+	}
 	screenType := p.CurrentScreenType()
 	p.TerminalParser = &TerminalParser{IsEnter: p.isEnterKeyPress,
 		EmitCommands:      p.EmitCommandEvent,
@@ -128,7 +134,7 @@ func (p *Parser) initial() {
 		mongoScreenParser: terminalparser.NewMongoShParser(),
 		screenType:        screenType,
 		preScreenType:     screenType,
-		Screen:            terminalparser.NewTerminalParser()}
+		Screen:            terminalparser.NewScreen(h, w)}
 
 	p.closed = make(chan struct{})
 	p.cmdRecordChan = make(chan *ExecutedCommand, 1024)
