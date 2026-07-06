@@ -325,6 +325,8 @@ func (s *TerminalParser) WriteInput(chars []byte) (string, bool) {
 			fmt.Println("===============================================")
 			// 这个时候应该是 输出状态了，命令结束了
 		}
+		cmd = sanitizeCommandInput(cmd)
+		s.cmd = sanitizeCommandInput(s.cmd)
 		return cmd, true
 	}
 	if s.state == OutputState {
@@ -475,6 +477,38 @@ func IsPasswordPrompt(ps1 string) bool {
 		}
 	}
 	return false
+}
+
+var (
+	// 带 ESC(\x1b) 或 ^[ 前缀的完整 CSI / SS3 控制序列：正常命令文本里不会出现，可无条件剥离
+	escControlSeqRegexp = regexp.MustCompile(`(?:\x1b\[[0-9;?]*[ -/]*[@-~]|\x1bO[@-~]|\^\[\[[0-9;?]*[ -/]*[@-~]|\^\[O[@-~])`)
+	// 丢失 ESC 前缀后残留的裸键盘序列片段：方向键 [A [B [C [D、Home/End [H [F、功能键 [3~、带修饰键 [1;5A 等
+	bareKeyboardControlSeqRegexp = regexp.MustCompile(`\[(?:[ABCDHF]|[0-9?]+(?:;[0-9?]+)*[ABCDHF~])`)
+	// 合法的 [...] 括号表达式（shell 字符类/通配符，如 [A-Z] [Dd] [0-9]），需保护不被当成裸残片误删
+	bracketExprRegexp = regexp.MustCompile(`\[[^\[\]]*]`)
+)
+
+// sanitizeCommandInput 过滤从终端屏幕提取出的命令字符串里残留的键盘控制序列片段（ASCII 残片，
+// 例如上下键 [A / [B、功能键 [3~、带修饰键 [1;5A 等）。
+//
+// 注意：仅用于「命令过滤匹配」和「审计记录」的命令文本清洗，绝不改动发往资产的输入字节，
+// 因此不会影响用户实际按方向键的行为。
+func sanitizeCommandInput(cmd string) string {
+	// 1) 先剥离带 ESC / ^[ 前缀的完整控制序列（绝对安全）
+	cmd = escControlSeqRegexp.ReplaceAllString(cmd, "")
+	// 2) 保护合法的 [...] 括号表达式，避免把 [A-Z]、[Dd] 这类字符类误当成方向键残片删掉
+	var saved []string
+	cmd = bracketExprRegexp.ReplaceAllStringFunc(cmd, func(m string) string {
+		saved = append(saved, m)
+		return fmt.Sprintf("\x00%d\x00", len(saved)-1)
+	})
+	// 3) 剥离剩余的裸键盘序列残片
+	cmd = bareKeyboardControlSeqRegexp.ReplaceAllString(cmd, "")
+	// 4) 还原被保护的括号表达式
+	for i, m := range saved {
+		cmd = strings.Replace(cmd, fmt.Sprintf("\x00%d\x00", i), m, 1)
+	}
+	return strings.TrimSpace(cmd)
 }
 
 // 合并的正则表达式，匹配以下四种模式：
