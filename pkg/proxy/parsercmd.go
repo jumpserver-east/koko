@@ -458,15 +458,18 @@ func TryParseResult(p []byte) []string {
 }
 
 // filtering for password input scenarios
+// 匹配规则:行内出现 password/passphrase/密码/口令 等关键词,且以冒号结尾。
+// 关键词与结尾冒号之间用 .* 允许存在 "for user 'xxx'"、URL 等内容,以覆盖
+// curl 的 `Enter host password for user 'elastic':`、git 的 `Password for 'https://...':`
+// 这类把用户名/地址放在 password 之后的提示符。
 var passwordPromptRegexps = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)password:?$`),                    // 常见的 Password:
-	regexp.MustCompile(`(?i)\[sudo]\s*password\s*for\s+.*:`), // [sudo] password for user:
-	regexp.MustCompile(`(?i)enter\s+passphrase\s+for\s+.*:`), // SSH/GPG 私钥 passphrase
-	regexp.MustCompile(`(?i)passphrase\s+for\s+key\s+.*:`),   // git/ssh key 提示
-	regexp.MustCompile(`(?i)请输入密码[:：]?$`),                    // 中文
-	regexp.MustCompile(`(?i)mot de passe[:：]?$`),             // 法语
-	regexp.MustCompile(`(?i)contraseña[:：]?$`),               // 西班牙语
-	regexp.MustCompile(`(?i)senha[:：]?$`),                    // 葡萄牙语
+	regexp.MustCompile(`(?i)password.*[:：]\s*$`),     // Password: / Enter host password for user 'x': / [sudo] password for user:
+	regexp.MustCompile(`(?i)passphrase.*[:：]\s*$`),   // SSH/GPG 私钥 passphrase
+	regexp.MustCompile(`密\s*码\s*[:：]?\s*$`),          // 中文:请输入密码
+	regexp.MustCompile(`口\s*令\s*[:：]?\s*$`),          // 中文:口令
+	regexp.MustCompile(`(?i)mot de passe.*[:：]\s*$`), // 法语
+	regexp.MustCompile(`(?i)contraseña.*[:：]\s*$`),   // 西班牙语
+	regexp.MustCompile(`(?i)senha.*[:：]\s*$`),        // 葡萄牙语
 }
 
 func IsPasswordPrompt(ps1 string) bool {
