@@ -45,6 +45,25 @@ var (
 		"chacha20-poly1305@openssh.com",
 		"aes128-ctr", "aes192-ctr", "aes256-ctr",
 	}
+
+	// 国密专用算法集合 (GM/T 0129-2023)。开启 SSH_GM_ONLY 时，SSH 服务端只协商
+	// 下列国密算法，参考 cmd/gmssh、cmd/gmsshd 的实现。
+	gmOnlyMACs      = []string{"hmac-sm3", "cbc-mac"}
+	gmOnlyKexAlgos  = []string{"sm2-sm3", "ecdh-sm2p256v1-sm3"}
+	gmOnlyCiphers   = []string{"sm4-gcm", "sm4-ctr", "sm4-cbc"}
+	gmOnlyPubKeyAlg = []string{gossh.KeyAlgoSM2}
+
+	defaultPubKeyAlgorithms = []string{
+		gossh.KeyAlgoSM2,
+		gossh.KeyAlgoED25519,
+		gossh.KeyAlgoSKED25519,
+		gossh.KeyAlgoSKECDSA256,
+		gossh.KeyAlgoECDSA256,
+		gossh.KeyAlgoECDSA384,
+		gossh.KeyAlgoECDSA521,
+		gossh.KeyAlgoRSASHA256,
+		gossh.KeyAlgoRSASHA512,
+	}
 )
 
 type Server struct {
@@ -84,6 +103,9 @@ func NewSSHServer(jmsService *service.JMService) *Server {
 		logger.Errorf("Generate SM2 host key failed: %s", err)
 	}
 	hostSigners := []ssh.Signer{sm2Signer, singer}
+	if cf.SSHGMOnly {
+		logger.Info("SSH GM-only mode enabled: only national-cryptography (GM/T 0129) algorithms are negotiated")
+	}
 	sshHandler := handler.NewServer(termCfg, jmsService)
 	srv := &ssh.Server{
 		Addr:             addr,
@@ -93,24 +115,29 @@ func NewSSHServer(jmsService *service.JMService) *Server {
 		HostSigners:      hostSigners,
 		MaxSessions:      int32(cf.SshMaxSessions),
 		ServerConfigCallback: func(ctx ssh.Context) *gossh.ServerConfig {
+			macs := supportedMACs
+			kexAlgos := supportedKexAlgos
+			ciphers := supportedCiphers
+			pubKeyAlgos := defaultPubKeyAlgorithms
+			omitKexExt := false
+			if cf.SSHGMOnly {
+				// 只保留国密算法。同时关闭 OpenSSH KEX 扩展 (含 strict KEX)，
+				// 让 KEXINIT 算法名单保持纯国密，符合 GM/T 0129-2023。
+				macs = gmOnlyMACs
+				kexAlgos = gmOnlyKexAlgos
+				ciphers = gmOnlyCiphers
+				pubKeyAlgos = gmOnlyPubKeyAlg
+				omitKexExt = true
+			}
 			cfg := gossh.Config{
-				MACs:         supportedMACs,
-				KeyExchanges: supportedKexAlgos,
-				Ciphers:      supportedCiphers,
+				MACs:                     macs,
+				KeyExchanges:             kexAlgos,
+				Ciphers:                  ciphers,
+				OmitOpenSSHKexExtensions: omitKexExt,
 			}
 			return &gossh.ServerConfig{
-				Config: cfg,
-				PublicKeyAuthAlgorithms: []string{
-					gossh.KeyAlgoSM2,
-					gossh.KeyAlgoED25519,
-					gossh.KeyAlgoSKED25519,
-					gossh.KeyAlgoSKECDSA256,
-					gossh.KeyAlgoECDSA256,
-					gossh.KeyAlgoECDSA384,
-					gossh.KeyAlgoECDSA521,
-					gossh.KeyAlgoRSASHA256,
-					gossh.KeyAlgoRSASHA512,
-				},
+				Config:                  cfg,
+				PublicKeyAuthAlgorithms: pubKeyAlgos,
 			}
 		},
 		Handler:                       sshHandler.SessionHandler,

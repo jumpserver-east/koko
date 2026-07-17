@@ -72,6 +72,12 @@ type Config struct {
 	// Force both public key and password authentication (two-factor SSH login)
 	ForceMultiAuth bool `mapstructure:"FORCE_MULTI_AUTH"`
 
+	// SSHGMOnly, when true, restricts the SSH server to national-cryptography
+	// (国密, GM/T 0129-2023) algorithms only: SM4 ciphers, sm2-sm3 key exchange,
+	// hmac-sm3/cbc-mac MACs and SM2 public key auth. OpenSSH KEX extensions
+	// (including strict KEX) are suppressed so the KEXINIT name-lists stay pure.
+	SSHGMOnly bool `mapstructure:"SSH_GM_ONLY"`
+
 	RootPath          string
 	DataFolderPath    string
 	LogDirPath        string
