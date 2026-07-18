@@ -24,16 +24,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
+	"time"
 
 	"github.com/emmansun/gmsm/sm2"
 	"github.com/emmansun/gmsm/smx509"
@@ -70,7 +68,6 @@ func main() {
 	password := flag.String("password", "admin", "Allowed password (for GM/T 0129 password auth)")
 	authorizedKeys := flag.String("authorized-keys", "", "Path to authorized_keys file (for SM2 public key auth)")
 	hostKeyFile := flag.String("hostkey", "", "Path to SM2 host key file (persisted self-signed GM host certificates are generated alongside it)")
-	shell := flag.String("shell", "", "Shell to run (default: $SHELL or /bin/sh)")
 	verbose := flag.Bool("v", false, "Verbose debug output")
 	flag.Parse()
 
@@ -161,14 +158,6 @@ func main() {
 		os.Exit(0)
 	}()
 
-	shellCmd := *shell
-	if shellCmd == "" {
-		shellCmd = os.Getenv("SHELL")
-		if shellCmd == "" {
-			shellCmd = "/bin/sh"
-		}
-	}
-
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -178,11 +167,11 @@ func main() {
 			logErr(fmt.Sprintf("Accept error: %v", err))
 			continue
 		}
-		go handleConnection(conn, config, shellCmd)
+		go handleConnection(conn, config)
 	}
 }
 
-func handleConnection(conn net.Conn, config *ssh.ServerConfig, shell string) {
+func handleConnection(conn net.Conn, config *ssh.ServerConfig) {
 	remoteAddr := conn.RemoteAddr().String()
 	logConn(fmt.Sprintf("New connection from %s", remoteAddr))
 
@@ -196,17 +185,27 @@ func handleConnection(conn net.Conn, config *ssh.ServerConfig, shell string) {
 	logConn(fmt.Sprintf("Authenticated: user=%s from %s", sshConn.User(), remoteAddr))
 	go ssh.DiscardRequests(reqs)
 
+	remoteHost, _, splitErr := net.SplitHostPort(remoteAddr)
+	if splitErr != nil {
+		remoteHost = remoteAddr
+	}
+
 	for newChannel := range chans {
 		if newChannel.ChannelType() != "session" {
 			newChannel.Reject(ssh.UnknownChannelType, "unsupported channel type")
 			continue
 		}
-		go handleSession(newChannel, shell, sshConn.User())
+		go handleSession(newChannel, sshConn.User(), remoteHost)
 	}
 	logConn(fmt.Sprintf("Disconnected: %s", remoteAddr))
 }
 
-func handleSession(newChannel ssh.NewChannel, shell, user string) {
+// handleSession 处理一个 SSH session 通道。
+//
+// 这是一个测试用的“回显”服务：无论客户端输入什么命令，服务端都只回复
+// “connection 连接成功”。它并不启动真实 shell，仅用于验证国密 SSH 握手
+// 与命令交互链路是否打通。
+func handleSession(newChannel ssh.NewChannel, user, remoteHost string) {
 	channel, requests, err := newChannel.Accept()
 	if err != nil {
 		logErr(fmt.Sprintf("Could not accept channel: %v", err))
@@ -214,113 +213,35 @@ func handleSession(newChannel ssh.NewChannel, shell, user string) {
 	}
 	defer channel.Close()
 
-	var cmd *exec.Cmd
-	var once sync.Once
-	closeCmd := func() {
-		if cmd != nil && cmd.Process != nil {
-			cmd.Process.Kill()
-			cmd.Wait()
-		}
-	}
-
-	envVars := []string{fmt.Sprintf("USER=%s", user), fmt.Sprintf("HOME=%s", os.Getenv("HOME"))}
-	var ptyReq bool
-
 	for req := range requests {
 		switch req.Type {
-		case "pty-req":
-			ptyReq = true
-			if req.WantReply {
-				req.Reply(true, nil)
-			}
-
-		case "env":
+		case "pty-req", "env", "window-change":
+			// 直接接受这些请求，测试服务不需要真实处理它们。
 			if req.WantReply {
 				req.Reply(true, nil)
 			}
 
 		case "shell":
-			if cmd != nil {
-				if req.WantReply {
-					req.Reply(false, nil)
-				}
-				continue
-			}
-
-			cmd = exec.Command(shell)
-			cmd.Env = append(os.Environ(), envVars...)
-			if ptyReq {
-				cmd.Env = append(cmd.Env, "TERM=xterm-256color")
-			}
-
-			stdin, _ := cmd.StdinPipe()
-			stdout, _ := cmd.StdoutPipe()
-			stderr, _ := cmd.StderrPipe()
-
-			if err := cmd.Start(); err != nil {
-				logErr(fmt.Sprintf("Failed to start shell: %v", err))
-				if req.WantReply {
-					req.Reply(false, nil)
-				}
-				return
-			}
-			logAuth(fmt.Sprintf("Shell started for user %s (pid=%d)", user, cmd.Process.Pid))
-
 			if req.WantReply {
 				req.Reply(true, nil)
 			}
-
-			go io.Copy(stdin, channel)
-			go io.Copy(channel, stdout)
-			go io.Copy(channel.Stderr(), stderr)
-
-			go func() {
-				cmd.Wait()
-				exitCode := 0
-				if cmd.ProcessState != nil {
-					exitCode = cmd.ProcessState.ExitCode()
-				}
-				channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{uint32(exitCode)}))
-				channel.Close()
-			}()
+			logAuth(fmt.Sprintf("Interactive shell started for user %s", user))
+			// 进入交互式回显循环：客户端输入任意命令都回复连接成功。
+			runFakeShell(channel, user, remoteHost)
+			channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{0}))
+			return
 
 		case "exec":
 			var payload struct{ Command string }
 			ssh.Unmarshal(req.Payload, &payload)
 			logAuth(fmt.Sprintf("Exec request: %s", payload.Command))
-
-			cmd = exec.Command(shell, "-c", payload.Command)
-			cmd.Env = append(os.Environ(), envVars...)
-
-			stdout, _ := cmd.StdoutPipe()
-			stderr, _ := cmd.StderrPipe()
-
-			if err := cmd.Start(); err != nil {
-				if req.WantReply {
-					req.Reply(false, nil)
-				}
-				return
-			}
 			if req.WantReply {
 				req.Reply(true, nil)
 			}
-
-			go io.Copy(channel, stdout)
-			go io.Copy(channel.Stderr(), stderr)
-			go func() {
-				cmd.Wait()
-				exitCode := 0
-				if cmd.ProcessState != nil {
-					exitCode = cmd.ProcessState.ExitCode()
-				}
-				channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{uint32(exitCode)}))
-				channel.Close()
-			}()
-
-		case "window-change":
-			if req.WantReply {
-				req.Reply(true, nil)
-			}
+			// 非交互式：无论执行什么命令都回复连接成功。
+			fmt.Fprint(channel, "connection 连接成功\r\n")
+			channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{0}))
+			return
 
 		default:
 			if req.WantReply {
@@ -328,8 +249,70 @@ func handleSession(newChannel ssh.NewChannel, shell, user string) {
 			}
 		}
 	}
+}
 
-	once.Do(closeCmd)
+// runFakeShell 实现一个极简交互式终端，模拟真实 SSH 登录后的界面：
+//   - 登录后打印 “Last login: ... from <客户端IP>”
+//   - 提示符形如 “<user>@jumpserver:~$ ”
+//   - 逐字节读取客户端输入并回显（客户端处于 raw 模式，需要服务端回显）
+//   - 每输入一行（回车结束），无论内容是什么都回复 “connection 连接成功”
+//   - 输入 exit / quit / logout 或 Ctrl-D（空行）/ Ctrl-C 退出
+func runFakeShell(channel ssh.Channel, user, remoteHost string) {
+	const hostname = "jumpserver"
+	prompt := fmt.Sprintf("%s@%s:~$ ", user, hostname)
+
+	lastLogin := time.Now().Format("Mon Jan _2 15:04:05 2006")
+	fmt.Fprintf(channel, "Last login: %s from %s\r\n", lastLogin, remoteHost)
+	fmt.Fprint(channel, prompt)
+
+	var line []byte
+	buf := make([]byte, 256)
+	for {
+		n, err := channel.Read(buf)
+		if err != nil {
+			return
+		}
+		for _, b := range buf[:n] {
+			switch b {
+			case '\r', '\n':
+				fmt.Fprint(channel, "\r\n")
+				cmd := strings.TrimSpace(string(line))
+				line = line[:0]
+				switch cmd {
+				case "exit", "quit", "logout":
+					fmt.Fprint(channel, "logout\r\n")
+					return
+				case "":
+					// 空命令，什么都不做，仅重新打印提示符。
+				default:
+					logAuth(fmt.Sprintf("user=%s command=%q -> connection 连接成功", user, cmd))
+					fmt.Fprint(channel, "connection 连接成功\r\n")
+				}
+				fmt.Fprint(channel, prompt)
+
+			case 0x03: // Ctrl-C：放弃当前行
+				fmt.Fprint(channel, "^C\r\n")
+				line = line[:0]
+				fmt.Fprint(channel, prompt)
+
+			case 0x04: // Ctrl-D：空行时退出
+				if len(line) == 0 {
+					fmt.Fprint(channel, "\r\n")
+					return
+				}
+
+			case 0x7f, 0x08: // Backspace / Delete
+				if len(line) > 0 {
+					line = line[:len(line)-1]
+					fmt.Fprint(channel, "\b \b")
+				}
+
+			default:
+				line = append(line, b)
+				channel.Write([]byte{b}) // 回显给客户端
+			}
+		}
+	}
 }
 
 // makePasswordCallback creates a GM/T 0129 password auth callback.
@@ -578,22 +561,6 @@ func loadAuthorizedKeys(path string) (map[string]bool, error) {
 		return nil, fmt.Errorf("no valid keys found in %s", path)
 	}
 	return keys, nil
-}
-
-// saveTempHostKey writes the host key to a temp file for debugging.
-func saveTempHostKey(signer ssh.Signer) string {
-	key := signer.(interface{ PrivateKey() interface{} }).PrivateKey()
-	block, err := ssh.MarshalPrivateKey(key, "")
-	if err != nil {
-		return ""
-	}
-	f, err := os.CreateTemp("", "gmsshd-hostkey-*.pem")
-	if err != nil {
-		return ""
-	}
-	pem.Encode(f, block)
-	f.Close()
-	return f.Name()
 }
 
 // runKeygen generates an SM2 key pair and writes them to disk in OpenSSH format.

@@ -89,9 +89,9 @@ func main() {
 	keygenPassphrase := flag.String("passphrase", "", "Passphrase to encrypt the private key (empty = no encryption)")
 
 	host := flag.String("host", "127.0.0.1", "SSH server host")
-	port := flag.String("port", "2222", "SSH server port")
+	port := flag.String("port", "3333", "SSH server port")
 	user := flag.String("user", "admin", "SSH username")
-	password := flag.String("password", "", "Password for GM/T 0129 password auth")
+	password := flag.String("password", "admin", "Password for GM/T 0129 password auth")
 	keyFile := flag.String("key", "", "Path to SM2 private key file (default: ~/.ssh/id_sm2)")
 	kexAlgo := flag.String("kex", "sm2-sm3", "Key exchange algorithm")
 	cipherAlgo := flag.String("cipher", "sm4-ctr", "Cipher algorithm (sm4-ctr, sm4-gcm, sm4-cbc)")

@@ -11,10 +11,26 @@ import (
 
 	gossh "golang.org/x/crypto/ssh"
 
+	"github.com/jumpserver/koko/pkg/config"
 	"github.com/jumpserver/koko/pkg/logger"
 )
 
 const sshClientVersion = "SSH-2.0-CSSH-1.0-JumpServer"
+
+// 国密专用算法集合 (GM/T 0129-2023)。开启 SSH_GM_ONLY 时，koko 作为客户端
+// 连接 Linux 资产也只协商下列国密算法，与 SSH 服务端 (pkg/sshd) 的 GM-only
+// 行为保持对称。
+var (
+	gmOnlyCiphers      = []string{gossh.CipherSM4GCM, gossh.CipherSM4CTR, gossh.CipherSM4CBC}
+	gmOnlyKexAlgos     = []string{gossh.KeyExchangeSM2SM3, "ecdh-sm2p256v1-sm3"}
+	gmOnlyMACs         = []string{gossh.HMACSM3, gossh.CBCMAC}
+	gmOnlyHostKeyAlgos = []string{gossh.KeyAlgoSM2}
+)
+
+// isSSHGMOnly 报告是否启用了 SSH 国密专用模式 (SSH_GM_ONLY)。
+func isSSHGMOnly() bool {
+	return config.GlobalConfig != nil && config.GlobalConfig.SSHGMOnly
+}
 
 type SSHClientOption func(conf *SSHClientOptions)
 
@@ -121,11 +137,25 @@ func (cfg *SSHClientOptions) clientConfig(auth []gossh.AuthMethod) *gossh.Client
 
 func (cfg *SSHClientOptions) clientConfigAttempts() []sshClientAttempt {
 	attempts := make([]sshClientAttempt, 0, 2)
-	if gmAuth := cfg.GMAuthMethods(); len(gmAuth) > 0 {
+	gmAuth := cfg.GMAuthMethods()
+	if len(gmAuth) > 0 {
 		attempts = append(attempts, sshClientAttempt{
 			label:  "gm",
 			config: cfg.clientConfig(gmAuth),
 		})
+	}
+
+	if isSSHGMOnly() {
+		// 国密专用模式：只允许国密协商与国密认证，不回退到传统算法/认证。
+		if len(attempts) == 0 {
+			// 没有可用的国密认证方法（例如非 SM2 私钥且未提供密码），
+			// 仍构造一个国密尝试以给出明确的协商/认证失败信息。
+			attempts = append(attempts, sshClientAttempt{
+				label:  "gm",
+				config: cfg.clientConfig(gmAuth),
+			})
+		}
+		return attempts
 	}
 
 	classicAuth := cfg.AuthMethods()
@@ -375,6 +405,17 @@ func (s *SSHClient) ReleaseSession(sess *gossh.Session) {
 }
 
 func createSSHConfig() gossh.Config {
+	if isSSHGMOnly() {
+		// 国密专用模式：只协商国密算法，并关闭 OpenSSH KEX 扩展 (含 strict KEX)，
+		// 让 KEXINIT 算法名单保持纯国密，符合 GM/T 0129-2023。
+		return gossh.Config{
+			Ciphers:                  gmOnlyCiphers,
+			KeyExchanges:             gmOnlyKexAlgos,
+			MACs:                     gmOnlyMACs,
+			OmitOpenSSHKexExtensions: true,
+		}
+	}
+
 	var cfg gossh.Config
 	cfg.SetDefaults()
 	algos := gossh.SupportedAlgorithms()
@@ -403,6 +444,11 @@ func createSSHConfig() gossh.Config {
 }
 
 func allHostKeyAlgorithms() []string {
+	if isSSHGMOnly() {
+		// 国密专用模式：只接受 SM2 主机密钥。
+		return gmOnlyHostKeyAlgos
+	}
+
 	supportedAlgos := gossh.SupportedAlgorithms()
 	insecureAlgos := gossh.InsecureAlgorithms()
 	hostKeyAlgos := make([]string, 0, len(supportedAlgos.HostKeys)+len(insecureAlgos.HostKeys)+1)
