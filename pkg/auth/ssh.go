@@ -17,6 +17,25 @@ import (
 
 var authErr = errors.New("auth failed")
 
+// finalizeAuthResult must wrap every value returned from an SSH auth callback.
+//
+// golang.org/x/crypto v0.52.0 rejects the connection outright when a callback
+// reports a *ssh.PartialSuccessError together with non-nil Permissions, because
+// permissions are not preserved across authentication steps. The gliderlabs
+// fork hands x/crypto ctx.Permissions().Permissions verbatim, and that pointer
+// is always allocated when the context is created, so it is never nil. Clearing
+// the embedded pointer here keeps multi-step auth (MFA, login confirmation and
+// the direct-SFTP keyboard-interactive flow) working without forking further.
+func finalizeAuthResult(ctx ssh.Context, res error) error {
+	if !isPartialSuccess(res) {
+		return res
+	}
+	if perms := ctx.Permissions(); perms != nil {
+		perms.Permissions = nil
+	}
+	return res
+}
+
 type SSHAuthFunc func(ctx ssh.Context, password, publicKey string) error
 
 func SSHPasswordAndPublicKeyAuth(jmsService *service.JMService) SSHAuthFunc {
@@ -56,7 +75,7 @@ func SSHPasswordAndPublicKeyAuth(jmsService *service.JMService) SSHAuthFunc {
 					}
 					logger.Infof("SSH conn[%s] %s for %s from %s", ctx.SessionID(),
 						action, username, remoteAddr)
-					return res
+					return finalizeAuthResult(ctx, res)
 				} else {
 					logger.Errorf("SSH conn[%s] token %s auth failed", ctx.SessionID(), req.ConnectToken.Id)
 					return authErr
@@ -154,11 +173,15 @@ func SSHPasswordAndPublicKeyAuth(jmsService *service.JMService) SSHAuthFunc {
 		}
 		logger.Infof("SSH conn[%s] %s %s for %s from %s", ctx.SessionID(),
 			action, authMethod, username, remoteAddr)
-		return res
+		return finalizeAuthResult(ctx, res)
 	}
 }
 
 func SSHKeyboardInteractiveAuth(ctx ssh.Context, challenger gossh.KeyboardInteractiveChallenge) error {
+	return finalizeAuthResult(ctx, sshKeyboardInteractiveAuth(ctx, challenger))
+}
+
+func sshKeyboardInteractiveAuth(ctx ssh.Context, challenger gossh.KeyboardInteractiveChallenge) error {
 	if value, ok := ctx.Value(ContextKeyAuthFailed).(*bool); ok && *value {
 		return authErr
 	}
