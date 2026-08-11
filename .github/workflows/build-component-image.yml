@@ -36,9 +36,127 @@ jobs:
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
-    uses: jumpserver-east/docker-web/.github/workflows/reusable-component-image.yml@docker-build
-    with:
-      source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_sha || github.event.ref }}
-      source_branch: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch || github.event.ref }}
-      image_tag: ${{ inputs.tag }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ALIYUN_ENABLED: ${{ secrets.ALIYUN_REGION != '' && secrets.ALIYUN_USERNAME != '' && secrets.ALIYUN_PASSWORD != '' }}
+      SOURCE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch || github.event.ref }}
+      SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_sha || github.event.ref }}
+      REQUESTED_TAG: ${{ inputs.tag }}
+
+    steps:
+      - name: Check out build configuration
+        uses: actions/checkout@v4
+        with:
+          ref: docker-build
+          fetch-depth: 1
+
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_REF }}
+          path: source
+          fetch-depth: 1
+
+      - name: Prepare tag
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -n "${REQUESTED_TAG}" ]; then
+            raw_tag="${REQUESTED_TAG}"
+          else
+            timestamp="$(TZ=Asia/Shanghai date +'%Y%m%d-%H%M%S')"
+            raw_tag="${SOURCE_BRANCH}-${timestamp}"
+          fi
+
+          tag="$(
+            printf '%s' "${raw_tag}" |
+              tr '[:upper:]' '[:lower:]' |
+              sed -E 's/[^a-z0-9_.-]+/-/g; s/^[.-]+//; s/[.-]+$//' |
+              cut -c1-128
+          )"
+
+          if [ -z "${tag}" ]; then
+            echo "Image tag is empty after normalization." >&2
+            exit 1
+          fi
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Log in to Aliyun
+        if: env.ALIYUN_ENABLED == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ALIYUN_REGION }}
+          username: ${{ secrets.ALIYUN_USERNAME }}
+          password: ${{ secrets.ALIYUN_PASSWORD }}
+
+      - name: Build and push EE image
+        uses: docker/bake-action@v6
+        env:
+          TAG: ${{ steps.metadata.outputs.tag }}
+        with:
+          source: .
+          files: .github/docker-bake.hcl
+          targets: ee
+          push: true
+          set: "*.platform=linux/amd64"
+
+      - name: Push to Aliyun
+        if: env.ALIYUN_ENABLED == 'true'
+        shell: bash
+        env:
+          ALIYUN_REGION: ${{ secrets.ALIYUN_REGION }}
+          IMAGE_TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          docker buildx imagetools create \
+            --tag "${ALIYUN_REGION}/fit2cloud_nickyang0_0/${GITHUB_REPOSITORY#*/}:${IMAGE_TAG}" \
+            "ghcr.io/jumpserver-east/${GITHUB_REPOSITORY#*/}:${IMAGE_TAG}"
+
+      - name: Verify GHCR package is private
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          status="$(
+            curl --silent --output /dev/null --write-out '%{http_code}' \
+              "https://ghcr.io/token?scope=repository%3Ajumpserver-east%2F${GITHUB_REPOSITORY#*/}%3Apull"
+          )"
+
+          if [ "${status}" != "401" ]; then
+            echo "Expected private GHCR package, anonymous token request returned HTTP ${status}." >&2
+            exit 1
+          fi
+
+      - name: Publish summary
+        shell: bash
+        env:
+          ALIYUN_REGION: ${{ secrets.ALIYUN_REGION }}
+        run: |
+          {
+            echo "### EE component image"
+            echo
+            echo "Branch: \`${SOURCE_BRANCH}\`"
+            echo
+            echo "GHCR: \`ghcr.io/jumpserver-east/${GITHUB_REPOSITORY#*/}:${{ steps.metadata.outputs.tag }}\`"
+            echo
+            if [ "${ALIYUN_ENABLED}" = "true" ]; then
+              echo "Aliyun: \`${ALIYUN_REGION}/fit2cloud_nickyang0_0/${GITHUB_REPOSITORY#*/}:${{ steps.metadata.outputs.tag }}\`"
+            else
+              echo "Aliyun: skipped (secrets are not configured)"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
