@@ -1,4 +1,4 @@
-name: Build Component Image to GHCR
+name: Build EE Component Image
 
 on:
   create:
@@ -41,3 +41,4 @@ jobs:
       source_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_sha || github.event.ref }}
       source_branch: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch || github.event.ref }}
       image_tag: ${{ inputs.tag }}
+    secrets: inherit
