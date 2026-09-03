@@ -95,14 +95,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Log in to Aliyun
-        if: env.ALIYUN_ENABLED == 'true'
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.ALIYUN_REGION }}
-          username: ${{ secrets.ALIYUN_USERNAME }}
-          password: ${{ secrets.ALIYUN_PASSWORD }}
-
       - name: Build and push EE image
         uses: docker/bake-action@v6
         env:
@@ -123,6 +115,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "${{ secrets.ALIYUN_PASSWORD }}" | docker login --username ${{ secrets.ALIYUN_USERNAME }} ${{ secrets.ALIYUN_REGION }} --password-stdin
           docker buildx imagetools create \
             --tag "${ALIYUN_REGION}/fit2cloud_nickyang0_0/${GITHUB_REPOSITORY#*/}:${IMAGE_TAG}" \
             "ghcr.io/jumpserver-east/${GITHUB_REPOSITORY#*/}:${IMAGE_TAG}"
