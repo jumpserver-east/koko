@@ -49,7 +49,8 @@ RUN set -ex \
 
 ADD go.mod go.sum .
 
-ARG GOPROXY=https://goproxy.io
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=${GOPROXY}
 ENV CGO_ENABLED=0
 ENV GO111MODULE=on
 ENV GOOS=linux
