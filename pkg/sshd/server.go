@@ -25,7 +25,7 @@ const (
 
 var (
 	supportedMACs = []string{"hmac-sha2-256-etm@openssh.com",
-		"hmac-sha2-256", "hmac-sha1"}
+		"hmac-sha2-256"}
 
 	supportedKexAlgos = []string{
 		"curve25519-sha256", "curve25519-sha256@libssh.org",
